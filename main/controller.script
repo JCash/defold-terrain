@@ -1,0 +1,144 @@
+local rendercam = require "rendercam.rendercam"
+
+--go.property("camera_url", msg.url())
+
+
+local function calc_view(eye, look_at, up)
+	return vmath.matrix4_look_at(eye, look_at, up)
+end
+
+local function set_view(view, projection)
+	--msg.post("@render:", "set_view_projection", {id = hash("wasd_camera"), view=view, projection=projection})
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	--msg.post("@render:", "use_camera_projection")
+
+	self.camera_url = msg.url(nil, "camera", nil)
+	self.input_move_speedup = 0
+	self.input_move = vmath.vector3()
+	self.input_mouse = vmath.vector3()
+	self.mouse_down = vmath.vector3()
+	self.mouse_smooth = {}
+	self.linear_speed = 100
+	self.linear_speed_multiplier = 10
+	self.mouse_sensitivity = vmath.vector3(.5,.5,0)
+	self.camera_position = go.get(self.camera_url, "position")
+	self.camera_rotation = vmath.vector3()
+	self.camera_forward = vmath.vector3(0,0,-1)
+	self.camera_up = vmath.vector3(0,1,0)
+
+	self.mouse_captured = false
+
+	for i=1,9 do
+		table.insert(self.mouse_smooth, vmath.vector3())
+	end
+
+
+	-- not rendercam
+	--[[
+	self.near = 0.2
+	self.far = 8000	
+	local aspect = sys.get_config("display.width")/sys.get_config("display.height")
+	self.projection = vmath.matrix4_perspective(math.pi/2, aspect, self.near, self.far)
+	window.set_listener(function(self, event, data)
+		if event == window.WINDOW_EVENT_RESIZED then
+			local aspect = data.width / data.height
+			pprint(data)
+			self.projection = vmath.matrix4_perspective(math.pi/2, aspect, self.near, self.far)
+		end		
+	end)
+
+	self.view = calc_view(self.camera_position, self.camera_position + self.camera_forward, self.camera_up)
+	set_view(self.view, self.projection)
+	--]]
+end
+
+function final(self)
+end
+
+local function handle_mouse_move(self, action)
+	self.input_mouse = vmath.vector3(action.dy, -action.dx, 0)
+end
+
+local function get_smoothed_mouse_input(t)
+	local out = vmath.vector3()
+	local factor = 1.0
+	for _,v in ipairs(t) do
+		out = out + v * factor
+		factor = factor * 0.65
+	end
+	return out
+end
+
+function update(self, dt)
+
+	
+	table.insert(self.mouse_smooth, 1, self.input_mouse)
+	
+	local mouse = get_smoothed_mouse_input(self.mouse_smooth)
+	self.camera_rotation.x = self.camera_rotation.x + mouse.x * self.mouse_sensitivity.x * dt
+	self.camera_rotation.y = self.camera_rotation.y + mouse.y * self.mouse_sensitivity.y * dt
+
+	local q_sideways = vmath.quat_rotation_y(self.camera_rotation.y)
+	local side = vmath.rotate(q_sideways, vmath.vector3(1,0,0))
+	local q_updown = vmath.quat_axis_angle(side, self.camera_rotation.x)
+	--local forward = vmath.rotate(q_updown, vmath.rotate(q_sideways, vmath.vector3(0,0,-1)))
+	self.camera_forward = vmath.rotate(q_updown, vmath.rotate(q_sideways, vmath.vector3(0,0,-1)))
+	go.set(self.camera_url, "rotation", q_updown * q_sideways)
+
+	local p = go.get(self.camera_url, "position")
+	local linear_speed = self.input_move_speedup == 1 and self.linear_speed_multiplier * self.linear_speed or self.linear_speed 
+	self.camera_position = p + (self.input_move.z * self.camera_forward + self.input_move.x * side + self.input_move.y * vmath.vector3(0,1,0)) * (linear_speed * dt)
+	go.set(self.camera_url, "position", self.camera_position)
+
+	-- not rendercam
+	--self.view = calc_view(self.camera_position, self.camera_position + self.camera_forward, self.camera_up)
+	--set_view(self.view, self.projection)
+
+	self.input_move_speedup = 0
+	self.input_move = vmath.vector3()
+	self.input_mouse = vmath.vector3()
+	self.mouse_down = vmath.vector3()
+	table.remove(self.mouse_smooth)
+end
+
+function on_message(self, message_id, message, sender)
+end
+
+function on_input(self, action_id, action)
+
+	--pprint(action_id, action)
+	if action_id == nil then
+		if self.mouse_captured then
+			handle_mouse_move(self, action)
+		end
+	elseif action_id == hash("MOVE_FORWARD") then
+		self.input_move.z = self.input_move.z + 1
+	elseif action_id == hash("MOVE_BACKWARD") then
+		self.input_move.z = self.input_move.z - 1
+	elseif action_id == hash("MOVE_LEFT") then
+		self.input_move.x = self.input_move.x - 1
+	elseif action_id == hash("MOVE_RIGHT") then
+		self.input_move.x = self.input_move.x + 1
+	elseif action_id == hash("MOVE_UP") then
+		self.input_move.y = self.input_move.y + 1
+	elseif action_id == hash("MOVE_DOWN") then
+		self.input_move.y = self.input_move.y - 1
+	elseif action_id == hash("MOVE_SPEEDUP") then
+		self.input_move_speedup = action.released and 0 or 1
+	elseif action_id == hash("MOUSE_BUTTON_1") then
+		self.mouse_down.x = action.released and 0 or 1
+		
+		if not self.mouse_captured then
+			handle_mouse_move(self, action)
+		end
+	end
+end
+
+function on_reload(self)
+	-- Add reload-handling code here
+	-- Learn more: https://defold.com/manuals/hot-reload/
+	-- Remove this function if not needed
+end

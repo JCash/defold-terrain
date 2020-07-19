@@ -1,0 +1,40 @@
+key_trigger {
+  input: KEY_SPACE
+  action: "MOVE_JUMP"
+}
+key_trigger {
+  input: KEY_W
+  action: "MOVE_FORWARD"
+}
+key_trigger {
+  input: KEY_A
+  action: "MOVE_LEFT"
+}
+key_trigger {
+  input: KEY_S
+  action: "MOVE_BACKWARD"
+}
+key_trigger {
+  input: KEY_D
+  action: "MOVE_RIGHT"
+}
+key_trigger {
+  input: KEY_Q
+  action: "MOVE_DOWN"
+}
+key_trigger {
+  input: KEY_E
+  action: "MOVE_UP"
+}
+key_trigger {
+  input: KEY_LSHIFT
+  action: "MOVE_SPEEDUP"
+}
+key_trigger {
+  input: KEY_0
+  action: "TOGGLE_PROFILER"
+}
+mouse_trigger {
+  input: MOUSE_BUTTON_1
+  action: "MOUSE_BUTTON_1"
+}
