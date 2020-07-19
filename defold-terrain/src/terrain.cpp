@@ -25,24 +25,24 @@ Vector3 PatchToWorldCoord(int xz[2], uint32_t lod)
     return Vector3(xz[0] * size, 0, xz[1] * size);
 }
 
-static inline void SetVertex(uint32_t index, const Vector3& p, const Vector3& n, const Vector3& uv, const Vector4& c,
+static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& uv, const Vector4& c,
                             float* positions, float* normals, float* texcoords, float* colors)
 {
-    positions[index*3+0] = p.getX();
-    positions[index*3+1] = p.getY();
-    positions[index*3+2] = p.getZ();
+    positions[0] = p.getX();
+    positions[1] = p.getY();
+    positions[2] = p.getZ();
 
-    normals[index*3+0] = n.getX();
-    normals[index*3+1] = n.getY();
-    normals[index*3+2] = n.getZ();
+    normals[0] = n.getX();
+    normals[1] = n.getY();
+    normals[2] = n.getZ();
 
-    texcoords[index*2+0] = uv.getX();
-    texcoords[index*2+1] = uv.getY();
+    texcoords[0] = uv.getX();
+    texcoords[1] = uv.getY();
 
-    colors[index*4+0] = c.getX();
-    colors[index*4+1] = c.getY();
-    colors[index*4+2] = c.getZ();
-    colors[index*4+3] = c.getW();
+    colors[0] = c.getX();
+    colors[1] = c.getY();
+    colors[2] = c.getZ();
+    colors[3] = c.getW();
 }
 
 static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
@@ -101,14 +101,15 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
     float scale = 1;
 
     uint32_t index = 0;
-    for (uint32_t x = 0; x < patch_size; ++x)
+    for (uint32_t x = 0; x <= patch_size-1; ++x)
     {
-        for (uint32_t z = 0; z < patch_size; ++z)
+        for (uint32_t z = 0; z <= patch_size-1; ++z)
         {
             Vector3 v0 = Vector3(  x, 0, z) * scale;
             Vector3 v1 = Vector3(  x, 0, z+1) * scale;
             Vector3 v2 = Vector3(x+1, 0, z+1) * scale;
             Vector3 v3 = Vector3(x+1, 0, z) * scale;
+
             Vector3 n0 = Vector3(0,1,0);
             Vector3 n1 = Vector3(0,1,0);
             Vector3 n2 = Vector3(0,1,0);
@@ -122,58 +123,26 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
             Vector4 col2 = Vector4(0,0,1,1);
             Vector4 col3 = Vector4(1,1,1,1);
 
-            SetVertex(index+0, v0, n0, uv0, col0, positions, normals, texcoords, colors);
-            SetVertex(index+1, v1, n1, uv1, col1, positions, normals, texcoords, colors);
-            SetVertex(index+2, v2, n2, uv2, col2, positions, normals, texcoords, colors);
+            #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; texcoords += texcoords_stride; colors += colors_stride;
 
-            SetVertex(index+3, v2, n2, uv2, col2, positions, normals, texcoords, colors);
-            SetVertex(index+4, v3, n3, uv3, col3, positions, normals, texcoords, colors);
-            SetVertex(index+5, v0, n0, uv0, col0, positions, normals, texcoords, colors);
+            SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(v1, n1, uv1, col1, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+
+            SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(v3, n3, uv3, col3, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+
+            #undef INCREMENT_STRIDE
         }
     }
 
-/*
-        local stream_position = buffer.get_stream(newbuf, "position")
-    local stream_normal = buffer.get_stream(newbuf, "normal")
-    local stream_texcoord = buffer.get_stream(newbuf, "texcoord")
-    local stream_color = buffer.get_stream(newbuf, "color")
-
-    local index = 0
-    for x=0,size-1 do
-        for z=0,size-1 do
-            -- topleft, bottom left, bottom right, top right
-            local v0 = vmath.vector3(  x, 0, z) * scale
-            local v1 = vmath.vector3(  x, 0, z+1) * scale
-            local v2 = vmath.vector3(x+1, 0, z+1) * scale
-            local v3 = vmath.vector3(x+1, 0, z) * scale
-
-            local n0 = vmath.vector3(0,1,0)
-            local n1 = vmath.vector3(0,1,0)
-            local n2 = vmath.vector3(0,1,0)
-            local n3 = vmath.vector3(0,1,0)
-
-            local uv0 = vmath.vector3(0,1,0)
-            local uv1 = vmath.vector3(0,1,0)
-            local uv2 = vmath.vector3(0,1,0)
-            local uv3 = vmath.vector3(0,1,0)
-
-            local col0 = vmath.vector4(1,1,1,1)
-            local col1 = vmath.vector4(1,1,1,1)
-            local col2 = vmath.vector4(1,1,1,1)
-            local col3 = vmath.vector4(1,1,1,1)
-
-            set_vertex(index+0, v0, n0, uv0, col0, stream_position, stream_normal, stream_texcoord, stream_color)
-            set_vertex(index+1, v1, n1, uv1, col1, stream_position, stream_normal, stream_texcoord, stream_color)
-            set_vertex(index+2, v2, n2, uv2, col2, stream_position, stream_normal, stream_texcoord, stream_color)
-
-            set_vertex(index+3, v2, n2, uv2, col2, stream_position, stream_normal, stream_texcoord, stream_color)
-            set_vertex(index+4, v3, n3, uv3, col3, stream_position, stream_normal, stream_texcoord, stream_color)
-            set_vertex(index+5, v0, n0, uv0, col0, stream_position, stream_normal, stream_texcoord, stream_color)
-            index = index + 6
-        end
-    end
-    */
-
+    r = dmBuffer::ValidateBuffer(*buffer);
+    if (r != dmBuffer::RESULT_OK)
+    {
+        dmLogError("Failed to get stream '%s': %s (%d)", "color", dmBuffer::GetResultString(r), r);
+        return;
+    }
 }
 
 
