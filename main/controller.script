@@ -19,9 +19,8 @@ function init(self)
 	self.input_move_speedup = 0
 	self.input_move = vmath.vector3()
 	self.input_mouse = vmath.vector3()
-	self.mouse_down = vmath.vector3()
 	self.mouse_smooth = {}
-	self.linear_speed = 100
+	self.linear_speed = 50
 	self.linear_speed_multiplier = 10
 	self.mouse_sensitivity = vmath.vector3(.5,.5,0)
 	self.camera_position = go.get(self.camera_url, "position")
@@ -100,7 +99,6 @@ function update(self, dt)
 	self.input_move_speedup = 0
 	self.input_move = vmath.vector3()
 	self.input_mouse = vmath.vector3()
-	self.mouse_down = vmath.vector3()
 	table.remove(self.mouse_smooth)
 end
 
@@ -129,10 +127,12 @@ function on_input(self, action_id, action)
 	elseif action_id == hash("MOVE_SPEEDUP") then
 		self.input_move_speedup = action.released and 0 or 1
 	elseif action_id == hash("MOUSE_BUTTON_1") then
-		self.mouse_down.x = action.released and 0 or 1
-		
-		if not self.mouse_captured then
+
+		if action.pressed then
+			self.mouse_captured = true
 			handle_mouse_move(self, action)
+		elseif action.released then
+			self.mouse_captured = false
 		end
 	end
 end

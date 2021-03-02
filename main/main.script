@@ -1,47 +1,58 @@
 local terrain_helper = require("defold-terrain/scripts/helper")
-local rendercam = require "rendercam.rendercam"
+local rendercam = require("rendercam.rendercam")
 
 local function terrain_listener(self, event, data)
 	if event == terrain.TERRAIN_PATCH_SHOW then
-		local mesh_url = table.remove(self.free_meshes)
+		if self.one then
+			return
+		end
 
+		--self.one = true
 
-		print("url", mesh_url)
+		local id = table.remove(self.free_meshes)
+		local mesh_url = msg.url(nil, id, "mesh")
+		--mesh_url = msg.url("terrain#mesh_lod0_0")
+
+		pprint("callback", mesh_url, event, data)
+
+		-- any time spent here is for uploading the vertex buffer
+		go.set_position(data.position, msg.url(nil, id, nil))
 		local res = go.get(mesh_url, "vertices")
 		resource.set_buffer(res, data.buffer)
 
 		local index = data.z * 65536 + data.x
 		table.insert(self.patches[0], index, mesh_url)
 	end
-	pprint("callback", event, data)
 end
 
 function init(self)
 	msg.post(".", "acquire_input_focus")
 	self.profiler_enabled = false
 
-	local terrain_data = { view = rendercam.view, proj = rendercam.proj }
-	terrain.init(terrain_listener, terrain_data)
+	self.one = false
+
+	if terrain then
+		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
+		terrain.init(terrain_listener, terrain_data)
+	end
 
 	-- patches in use
 	self.patches = {}
 	self.patches[0] = {} -- lod 0
 
-	self.free_meshes = {}
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_0"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_1"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_2"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_3"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_4"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_5"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_6"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_7"))
-	table.insert(self.free_meshes, msg.url("terrain#mesh_lod0_8"))
+	local patches = collectionfactory.create("terrain#collectionfactory")
+	pprint("PATCHES", patches)
 	
+	self.free_meshes = {}
 
-	local b = terrain_helper.create_patch_flat(128,3.95)
+	for _, v in pairs(patches) do
+		table.insert(self.free_meshes, v)
+	end
 
-	print(b)
+
+	--local b = terrain_helper.create_patch_flat(128,3.95)
+
+	--print(b)
 	--[[
 	local res = nil
 
@@ -69,17 +80,24 @@ function init(self)
 end
 
 function final(self)
-	terrain.exit()
+	if terrain then
+		terrain.exit()
+	end
 end
 
 function update(self, dt)
-	local terrain_data = { view = rendercam.view, proj = rendercam.proj }
-	terrain.update(dt, terrain_data)
+	if terrain then
+		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
+		terrain.update(dt, terrain_data)
+	end
 end
 
 function on_input(self, action_id, action)
 	if action_id == hash("TOGGLE_PROFILER") and action.pressed then
 		self.profiler_enabled = not self.profiler_enabled
 		profiler.enable_ui(self.profiler_enabled)
+	elseif action_id == hash("TOGGLE_WIREFRAME") and action.pressed then
+		self.profiler_enabled = not self.profiler_enabled
+		msg.post("@render:", "gfx_dbg_toggle", {'wireframe'})
 	end
 end

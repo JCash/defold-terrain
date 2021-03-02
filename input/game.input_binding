@@ -34,6 +34,10 @@ key_trigger {
   input: KEY_0
   action: "TOGGLE_PROFILER"
 }
+key_trigger {
+  input: KEY_9
+  action: "TOGGLE_WIREFRAME"
+}
 mouse_trigger {
   input: MOUSE_BUTTON_1
   action: "MOUSE_BUTTON_1"

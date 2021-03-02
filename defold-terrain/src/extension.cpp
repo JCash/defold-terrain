@@ -211,12 +211,13 @@ static void LuaInit(lua_State* L)
     assert(top == lua_gettop(L));
 }
 
-static dmExtension::Result AppInitializeMyExtension(dmExtension::AppParams* params)
+static dmExtension::Result AppInitialize(dmExtension::AppParams* params)
 {
+    printf("AppInitialize %s Extension\n", MODULE_NAME);
     return dmExtension::RESULT_OK;
 }
 
-static dmExtension::Result InitializeMyExtension(dmExtension::Params* params)
+static dmExtension::Result Initialize(dmExtension::Params* params)
 {
     g_TerrainWorld = new ExtensionContext;
     LuaInit(params->m_L);
@@ -224,12 +225,12 @@ static dmExtension::Result InitializeMyExtension(dmExtension::Params* params)
     return dmExtension::RESULT_OK;
 }
 
-static dmExtension::Result AppFinalizeMyExtension(dmExtension::AppParams* params)
+static dmExtension::Result AppFinalize(dmExtension::AppParams* params)
 {
     return dmExtension::RESULT_OK;
 }
 
-static dmExtension::Result FinalizeMyExtension(dmExtension::Params* params)
+static dmExtension::Result Finalize(dmExtension::Params* params)
 {
     delete g_TerrainWorld;
     g_TerrainWorld = 0;
@@ -242,6 +243,6 @@ static dmExtension::Result FinalizeMyExtension(dmExtension::Params* params)
 //
 // DM_DECLARE_EXTENSION(symbol, name, app_init, app_final, init, update, on_event, final)
 
-// MyExtension is the C++ symbol that holds all relevant extension data.
+//  is the C++ symbol that holds all relevant extension data.
 // It must match the name field in the `ext.manifest`
-DM_DECLARE_EXTENSION(TerrainExt, "Terrain", dmTerrain::AppInitializeMyExtension, dmTerrain::AppFinalizeMyExtension, dmTerrain::InitializeMyExtension, 0, 0, dmTerrain::FinalizeMyExtension)
+DM_DECLARE_EXTENSION(TerrainExt, "Terrain", dmTerrain::AppInitialize, dmTerrain::AppFinalize, dmTerrain::Initialize, 0, 0, dmTerrain::Finalize)

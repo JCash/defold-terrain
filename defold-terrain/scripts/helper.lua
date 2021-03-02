@@ -29,7 +29,7 @@ function M.create_patch_flat(size, scale)
 	print("size", size)
 	print("num_triangles", num_triangles)
 	print("num_vertices", num_vertices)
-	
+
 	local newbuf = buffer.create( num_vertices, {
 		{name=hash("position"), type=buffer.VALUE_TYPE_FLOAT32, count=3 },
 		{name=hash("normal"), type=buffer.VALUE_TYPE_FLOAT32, count=3 },
@@ -50,7 +50,7 @@ function M.create_patch_flat(size, scale)
 			local v1 = vmath.vector3(  x, 0, z+1) * scale
 			local v2 = vmath.vector3(x+1, 0, z+1) * scale
 			local v3 = vmath.vector3(x+1, 0, z) * scale
-						
+
 			local n0 = vmath.vector3(0,1,0)
 			local n1 = vmath.vector3(0,1,0)
 			local n2 = vmath.vector3(0,1,0)

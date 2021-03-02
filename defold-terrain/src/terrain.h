@@ -1,5 +1,6 @@
 #pragma once
 #include <dmsdk/sdk.h>
+#include "rng.h"
 
 namespace dmTerrain {
 
@@ -15,12 +16,18 @@ namespace dmTerrain {
 
     struct TerrainPatch
     {
-        dmBuffer::HBuffer   m_Buffer;
+        uint16_t*           m_Heightmap;
+        dmBuffer::HBuffer   m_Buffer;   // The buffer with all the vertex data
         Vector3             m_Position;
-        int                 m_XZ[2];
+        dmRng::Rng          m_Rng; // A random seed generator, seed derived from the world seed
+        uint32_t            m_HeightSeed; // The same for all patches, making it easy to query the height
+        uint16_t            m_HeightMin;
+        uint16_t            m_HeightMax;
+        int                 m_XZ[2]; // Unit coors. First patch is (0,0), second is (1,0)
         uint32_t            m_Lod:4;
         uint32_t            m_IsLoaded:1;
-        uint32_t            :27;
+        uint32_t            m_Generate:1; // 0 = load from file, 1 = Generate through noise
+        uint32_t            :26;
     };
 
     typedef struct TerrainWorld* HTerrain;
