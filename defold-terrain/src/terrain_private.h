@@ -1,6 +1,8 @@
 #pragma once
 #include <dmsdk/sdk.h>
 #include <dmsdk/dlib/align.h>
+#include <dmsdk/dlib/thread.h>
+#include <dmsdk/dlib/condition_variable.h>
 #include "terrain.h"
 #include "rng.h"
 
@@ -42,6 +44,11 @@ namespace dmTerrain {
         dmRng::Rng m_Rng;
 
         dmArray<TerrainWork> m_Work;
+
+        uint8_t m_ThreadActive;
+        dmThread::Thread m_Thread;
+        dmMutex::HMutex m_ThreadMutex;
+        dmConditionVariable::HConditionVariable m_ThreadCondition;
 
         void* m_LoaderContext;
 

@@ -20,6 +20,8 @@ static float UNSIGNED_TO_HEIGHT_FACTOR = HEIGHT_SCALE / 65535.0f;
 
 int PATCH_SIZES[NUM_LOD_LEVELS];
 
+static void TerrainThread(void* ctx);
+
 int GetPatchSize(int lod)
 {
     return PATCH_SIZES[lod];
@@ -54,8 +56,8 @@ void extract_planes_from_projmat(
     for (int i = 4; i--; ) far[i]       = mat[i][3] - mat[i][2];
 }
 
-static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& uv, const Vector4& c,
-                            float* positions, float* normals, float* texcoords, float* colors)
+static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& uv, const uint8_t* c,
+                            float* positions, float* normals, float* texcoords, uint8_t* colors)
 {
     positions[0] = p.getX();
     positions[1] = p.getY();
@@ -68,18 +70,23 @@ static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& 
     texcoords[0] = uv.getX();
     texcoords[1] = uv.getY();
 
-    colors[0] = c.getX();
-    colors[1] = c.getY();
-    colors[2] = c.getZ();
-    colors[3] = c.getW();
+    colors[0] = c[0];
+    colors[1] = c[1];
+    colors[2] = c[2];
 }
 
 static void GetStreams(dmBuffer::HBuffer buffer,
                 float*& positions, uint32_t& positions_stride,
                 float*& normals, uint32_t& normals_stride,
                 float*& texcoords, uint32_t& texcoords_stride,
-                float*& colors, uint32_t& colors_stride)
+                uint8_t*& colors, uint32_t& colors_stride)
 {
+
+    void* out_bytes = 0;
+    uint32_t out_size = 0;
+    dmBuffer::GetBytes(buffer, &out_bytes, &out_size);
+    printf("Buffer is %u bytes (%u mb)\n", out_size, out_size/(1024*1024));
+
     uint32_t positions_count; uint32_t positions_components;
     uint32_t normals_count; uint32_t normals_components;
     uint32_t texcoords_count; uint32_t texcoords_components;
@@ -111,48 +118,48 @@ static void GetStreams(dmBuffer::HBuffer buffer,
     }
 }
 
-static void FillFlatBuffer(uint32_t patch_size, float* positions, uint32_t positions_stride,
-                                                float* normals, uint32_t normals_stride,
-                                                float* texcoords, uint32_t texcoords_stride,
-                                                float* colors, uint32_t colors_stride)
-{
-    float scale = 1;
-    for (uint32_t x = 0; x <= patch_size-1; ++x)
-    {
-        for (uint32_t z = 0; z <= patch_size-1; ++z)
-        {
-            Vector3 v0 = Vector3(  x, 0, z) * scale;
-            Vector3 v1 = Vector3(  x, 0, z+1) * scale;
-            Vector3 v2 = Vector3(x+1, 0, z+1) * scale;
-            Vector3 v3 = Vector3(x+1, 0, z) * scale;
+// static void FillFlatBuffer(uint32_t patch_size, float* positions, uint32_t positions_stride,
+//                                                 float* normals, uint32_t normals_stride,
+//                                                 float* texcoords, uint32_t texcoords_stride,
+//                                                 uint8_t* colors, uint32_t colors_stride)
+// {
+//     float scale = 1;
+//     for (uint32_t x = 0; x <= patch_size-1; ++x)
+//     {
+//         for (uint32_t z = 0; z <= patch_size-1; ++z)
+//         {
+//             Vector3 v0 = Vector3(  x, 0, z) * scale;
+//             Vector3 v1 = Vector3(  x, 0, z+1) * scale;
+//             Vector3 v2 = Vector3(x+1, 0, z+1) * scale;
+//             Vector3 v3 = Vector3(x+1, 0, z) * scale;
 
-            Vector3 n0 = Vector3(0,1,0);
-            Vector3 n1 = Vector3(0,1,0);
-            Vector3 n2 = Vector3(0,1,0);
-            Vector3 n3 = Vector3(0,1,0);
-            Vector3 uv0 = Vector3(0,1,0);
-            Vector3 uv1 = Vector3(0,1,0);
-            Vector3 uv2 = Vector3(0,1,0);
-            Vector3 uv3 = Vector3(0,1,0);
-            Vector4 col0 = Vector4(1,1,1,1);
-            Vector4 col1 = Vector4(1,1,1,1);
-            Vector4 col2 = Vector4(1,1,1,1);
-            Vector4 col3 = Vector4(1,1,1,1);
+//             Vector3 n0 = Vector3(0,1,0);
+//             Vector3 n1 = Vector3(0,1,0);
+//             Vector3 n2 = Vector3(0,1,0);
+//             Vector3 n3 = Vector3(0,1,0);
+//             Vector3 uv0 = Vector3(0,1,0);
+//             Vector3 uv1 = Vector3(0,1,0);
+//             Vector3 uv2 = Vector3(0,1,0);
+//             Vector3 uv3 = Vector3(0,1,0);
+//             Vector4 col0 = Vector4(1,1,1,1);
+//             Vector4 col1 = Vector4(1,1,1,1);
+//             Vector4 col2 = Vector4(1,1,1,1);
+//             Vector4 col3 = Vector4(1,1,1,1);
 
-            #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; texcoords += texcoords_stride; colors += colors_stride;
+//             #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; texcoords += texcoords_stride; colors += colors_stride;
 
-            SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(v1, n1, uv1, col1, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v1, n1, uv1, col1, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
 
-            SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(v3, n3, uv3, col3, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v3, n3, uv3, col3, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+//             SetVertex(v0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
 
-            #undef INCREMENT_STRIDE
-        }
-    }
-}
+//             #undef INCREMENT_STRIDE
+//         }
+//     }
+// }
 
 static float GenerateHeight(uint32_t seed, float x, float z)
 {
@@ -299,9 +306,8 @@ static void GeneratePatchHeights(TerrainPatch* patch)
     }
 
     patch->m_IsDataLoaded = 1;
-    printf("XZ: %d %d  height 0,0: %u \n", patch->m_XZ[0], patch->m_XZ[1], patch->m_Heightmap[0]);
 
-
+    //printf("XZ: %d %d\n", patch->m_XZ[0], patch->m_XZ[1]);
     //printf("HEIGHT min/max: %f %f\n", height_min, height_max);
 }
 
@@ -312,7 +318,7 @@ static void GenerateVertexData(TerrainPatch* patch)
     float* positions; uint32_t positions_stride;
     float* normals; uint32_t normals_stride;
     float* texcoords; uint32_t texcoords_stride;
-    float* colors; uint32_t colors_stride;
+    uint8_t* colors; uint32_t colors_stride;
     GetStreams(patch->m_Buffer,
                 positions, positions_stride,
                 normals, normals_stride,
@@ -367,10 +373,11 @@ static void GenerateVertexData(TerrainPatch* patch)
             Vector3 uv1 = Vector3(0,1,0);
             Vector3 uv2 = Vector3(0,1,0);
             Vector3 uv3 = Vector3(0,1,0);
-            Vector4 col0 = Vector4(1,1,1,1);
-            Vector4 col1 = Vector4(1,1,1,1);
-            Vector4 col2 = Vector4(1,1,1,1);
-            Vector4 col3 = Vector4(1,1,1,1);
+
+            uint8_t col0[3] = {255,255,255};
+            uint8_t col1[3] = {255,255,255};
+            uint8_t col2[3] = {255,255,255};
+            uint8_t col3[3] = {255,255,255};
 
             #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; texcoords += texcoords_stride; colors += colors_stride;
 
@@ -422,7 +429,7 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
         {VERTEX_STREAM_NAME_POSITION, dmBuffer::VALUE_TYPE_FLOAT32, 3},
         {VERTEX_STREAM_NAME_NORMAL, dmBuffer::VALUE_TYPE_FLOAT32, 3},
         {VERTEX_STREAM_NAME_TEXCOORD, dmBuffer::VALUE_TYPE_FLOAT32, 2},
-        {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_FLOAT32, 4},
+        {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_UINT8, 3},
     };
 
     // num triangles: num_quads * num_triangles per quad * num vertices per triangle
@@ -444,6 +451,7 @@ static void PutWork(HTerrain terrain, TerrainWork item)
     if (terrain->m_Work.Full())
         terrain->m_Work.OffsetCapacity(9*2);
     terrain->m_Work.Push(item);
+    dmConditionVariable::Signal(terrain->m_ThreadCondition);
 }
 
 void PatchLoad(HTerrain terrain, TerrainPatch* patch)
@@ -510,6 +518,7 @@ HTerrain Create(const InitParams& params)
     }
 
     HTerrain terrain = new TerrainWorld;
+
     terrain->m_Callback = params.m_Callback;
     terrain->m_View = params.m_View;
     terrain->m_Proj = params.m_Proj;
@@ -548,11 +557,6 @@ HTerrain Create(const InitParams& params)
 
                 CreateBuffer(&patch->m_Buffer, patch_size);
 
-                // patch->m_XZ[0] = patch_lod->m_CameraXZ[0] + x;
-                // patch->m_XZ[1] = patch_lod->m_CameraXZ[1] + z;
-
-                // patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
-
                 // dmRng::Init(&patch->m_Rng, dmRng::RandU32(&terrain->m_Rng));
             }
         }
@@ -561,17 +565,30 @@ HTerrain Create(const InitParams& params)
     terrain->m_LoaderContext = 0;
     //terrain->m_LoaderContext = RawFileLoader_Init("/Users/mawe/work/projects/users/mawe/defold-terrain/data/heightmap.r16");
 
+    terrain->m_ThreadActive = true;
+    terrain->m_Thread = dmThread::New(TerrainThread, 0x80000, terrain, "terrain");
+    terrain->m_ThreadMutex = dmMutex::New();
+    terrain->m_ThreadCondition = dmConditionVariable::New();
+
     return terrain;
 }
 
 
 void Destroy(HTerrain terrain)
 {
-    // TODO: Cancel loading
-    // TODO: Post hide events?
-
     if (terrain->m_LoaderContext)
         RawFileLoader_Exit(terrain->m_LoaderContext);
+
+    // Exit the thread
+    terrain->m_ThreadActive = false;
+    dmMutex::Lock(terrain->m_ThreadMutex);
+    dmConditionVariable::Signal(terrain->m_ThreadCondition);
+    dmMutex::Unlock(terrain->m_ThreadMutex);
+    // wait for it
+    dmThread::Join(terrain->m_Thread);
+
+    dmConditionVariable::Delete(terrain->m_ThreadCondition);
+    dmMutex::Delete(terrain->m_ThreadMutex);
 
     for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
     {
@@ -624,6 +641,22 @@ static void FlushWorkQueue(HTerrain terrain, dmArray<TerrainWork>& commands)
         commands.EraseSwap(i);
         --i;
         --size;
+    }
+}
+
+static void TerrainThread(void* ctx)
+{
+    TerrainWorld* terrain = (TerrainWorld*)ctx;
+    while (terrain->m_ThreadActive)
+    {
+        // Lock and sleep until signaled there is jobs queued up
+        dmMutex::ScopedLock lk(terrain->m_ThreadMutex);
+        while(terrain->m_Work.Empty() && !terrain->m_ThreadActive)
+        {
+            dmConditionVariable::Wait(terrain->m_ThreadCondition, terrain->m_ThreadMutex);
+        }
+
+        FlushWorkQueue(terrain, terrain->m_Work);
     }
 }
 
@@ -778,7 +811,9 @@ void Update(HTerrain terrain, const UpdateParams& params)
 
     UpdatePatches(terrain, terrain->m_CameraPos);
 
-    FlushWorkQueue(terrain, terrain->m_Work);
+    // For single threaded systems
+    if (!terrain->m_Thread)
+        FlushWorkQueue(terrain, terrain->m_Work);
 }
 
 

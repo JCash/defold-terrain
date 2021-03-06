@@ -19,6 +19,7 @@ struct ExtensionContext
     dmScript::LuaCallbackInfo* m_Callback;
     HTerrain m_Terrain;
     dmArray<TerrainCommand> m_Commands;
+    dmMutex::HMutex m_CommandsMutex;
 };
 ExtensionContext* g_TerrainWorld = 0;
 
@@ -86,14 +87,17 @@ static void Terrain_Callback(TerrainEvents event, const TerrainPatch* patch)
     cmd.m_Event = event;
     cmd.m_Patch = patch;
 
+    DM_MUTEX_SCOPED_LOCK(world->m_CommandsMutex);
     if (world->m_Commands.Full())
         world->m_Commands.OffsetCapacity(9*2);
     world->m_Commands.Push(cmd);
 }
 
 
-static void FlushCommandQueue(dmArray<TerrainCommand>& commands)
+static void FlushCommandQueue(ExtensionContext* world, dmArray<TerrainCommand>& commands)
 {
+    DM_MUTEX_SCOPED_LOCK(world->m_CommandsMutex);
+
     uint32_t size = commands.Size();
     for (uint32_t i = 0; i < size; ++i)
     {
@@ -158,9 +162,6 @@ static int Terrain_Exit(lua_State* L)
     return 0;
 }
 
-
-
-
 static int Terrain_Update(lua_State* L)
 {
     DM_LUA_STACK_CHECK(L, 0);
@@ -191,7 +192,7 @@ static int Terrain_Update(lua_State* L)
 
     dmTerrain::Update(world->m_Terrain, update_params);
 
-    FlushCommandQueue(world->m_Commands);
+    FlushCommandQueue(world, world->m_Commands);
 
     return 0;
 }
@@ -251,6 +252,7 @@ static dmExtension::Result AppInitialize(dmExtension::AppParams* params)
 static dmExtension::Result Initialize(dmExtension::Params* params)
 {
     g_TerrainWorld = new ExtensionContext;
+    g_TerrainWorld->m_CommandsMutex = dmMutex::New();
     LuaInit(params->m_L);
     printf("Registered %s Extension\n", MODULE_NAME);
     return dmExtension::RESULT_OK;
@@ -263,6 +265,7 @@ static dmExtension::Result AppFinalize(dmExtension::AppParams* params)
 
 static dmExtension::Result Finalize(dmExtension::Params* params)
 {
+    dmMutex::Delete(g_TerrainWorld->m_CommandsMutex);
     delete g_TerrainWorld;
     g_TerrainWorld = 0;
     return dmExtension::RESULT_OK;
