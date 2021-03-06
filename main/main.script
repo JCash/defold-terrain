@@ -15,7 +15,7 @@ local function terrain_listener(self, event, data)
 		--mesh_url = msg.url("terrain#mesh_lod0_0")
 
 		--pprint("callback", mesh_url, event, data)
-		print("SHOW", mesh_id, data.id, mesh_url, data.position)
+		print("SHOW", data.id, data.x, data.z, data.position)
 
 		-- any time spent here is for uploading the vertex buffer
 		go.set_position(data.position, mesh_id)
@@ -29,7 +29,7 @@ local function terrain_listener(self, event, data)
 		-- end
 		--pprint("PATCHES", self.patches[0])
 	elseif event == terrain.TERRAIN_PATCH_HIDE then
-		print("MAWE", "hide patch", data.id, "pos", data.x, data.z)
+		print("HIDE", data.id, "pos", data.x, data.z)
 		--pprint("PATCHES", data.id, self.patches[0])
 		-- for k, _ in pairs(self.patches[0]) do
 		-- 	print("MAWE", "key", k)
@@ -48,6 +48,7 @@ function init(self)
 	self.one = false
 
 	if terrain then
+		self.patch_size = 512 --lod 0
 		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
 		terrain.init(terrain_listener, terrain_data)
 	end
@@ -62,6 +63,9 @@ function init(self)
 	self.free_meshes = {}
 
 	for _, v in pairs(patches) do
+		local mesh_url = msg.url(nil, v, "mesh")
+		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
+		go.set(mesh_url, "dims", dims)
 		table.insert(self.free_meshes, v)
 	end
 end
@@ -87,7 +91,7 @@ function update(self, dt)
 		local pos = vmath.vector3(inv.m03, inv.m13, inv.m23)
 		local dir = vmath.vector3(-inv.m02, -inv.m12, -inv.m22)
 		msg.post("main#gui", "set_position", {position = pos, direction = dir})
-		
+
 		terrain.update(dt, terrain_data)
 	end
 end

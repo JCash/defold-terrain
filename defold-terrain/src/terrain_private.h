@@ -38,6 +38,7 @@ namespace dmTerrain {
         Matrix4 m_View;     // View matrix
         Matrix4 m_Proj;     // Used for frustum culling (later on)
         Vector3 m_CameraPos;// Camera position
+        Vector3 m_CameraDir;// Camera dir
 
         TerrainPatchLod m_Terrain[NUM_LOD_LEVELS];
 

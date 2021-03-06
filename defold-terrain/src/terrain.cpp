@@ -56,8 +56,8 @@ void extract_planes_from_projmat(
     for (int i = 4; i--; ) far[i]       = mat[i][3] - mat[i][2];
 }
 
-static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& uv, const uint8_t* c,
-                            float* positions, float* normals, float* texcoords, uint8_t* colors)
+static inline void SetVertex(const Vector3& p, const Vector3& n, const uint8_t* c,
+                            float* positions, float* normals, uint8_t* colors)
 {
     positions[0] = p.getX();
     positions[1] = p.getY();
@@ -67,9 +67,6 @@ static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& 
     normals[1] = n.getY();
     normals[2] = n.getZ();
 
-    texcoords[0] = uv.getX();
-    texcoords[1] = uv.getY();
-
     colors[0] = c[0];
     colors[1] = c[1];
     colors[2] = c[2];
@@ -78,7 +75,6 @@ static inline void SetVertex(const Vector3& p, const Vector3& n, const Vector3& 
 static void GetStreams(dmBuffer::HBuffer buffer,
                 float*& positions, uint32_t& positions_stride,
                 float*& normals, uint32_t& normals_stride,
-                float*& texcoords, uint32_t& texcoords_stride,
                 uint8_t*& colors, uint32_t& colors_stride)
 {
 
@@ -89,7 +85,6 @@ static void GetStreams(dmBuffer::HBuffer buffer,
 
     uint32_t positions_count; uint32_t positions_components;
     uint32_t normals_count; uint32_t normals_components;
-    uint32_t texcoords_count; uint32_t texcoords_components;
     uint32_t colors_count; uint32_t colors_components;
 
     dmBuffer::Result r = dmBuffer::GetStream(buffer, VERTEX_STREAM_NAME_POSITION, (void**)&positions, &positions_count, &positions_components, &positions_stride);
@@ -102,12 +97,6 @@ static void GetStreams(dmBuffer::HBuffer buffer,
     if (r != dmBuffer::RESULT_OK)
     {
         dmLogError("Failed to get stream '%s': %s (%d)", dmHashReverseSafe64(VERTEX_STREAM_NAME_NORMAL), dmBuffer::GetResultString(r), r);
-        return;
-    }
-    r = dmBuffer::GetStream(buffer, VERTEX_STREAM_NAME_TEXCOORD, (void**)&texcoords, &texcoords_count, &texcoords_components, &texcoords_stride);
-    if (r != dmBuffer::RESULT_OK)
-    {
-        dmLogError("Failed to get stream '%s': %s (%d)", dmHashReverseSafe64(VERTEX_STREAM_NAME_TEXCOORD), dmBuffer::GetResultString(r), r);
         return;
     }
     r = dmBuffer::GetStream(buffer, VERTEX_STREAM_NAME_COLOR, (void**)&colors, &colors_count, &colors_components, &colors_stride);
@@ -201,25 +190,13 @@ static float GetHeight(TerrainPatch* patch, int x, int z)
 
 static Vector3 GetNormal(TerrainPatch* patch, int x, int z)
 {
-//printf("GetNormal %d %d\n", x, z);
     float x_a = GetHeight(patch, x-1, z);
     float x_b = GetHeight(patch, x+1, z);
     float z_a = GetHeight(patch, x, z-1);
     float z_b = GetHeight(patch, x, z+1);
 
-    // float dx = x_b - x_a;
-    // float dz = z_b - z_a;
-
     float xz_scale = 1.0f;
     Vector3 n(x_b - x_a, 2 * xz_scale, z_b - z_a);
-// printf("h: %f %f %f %f\n", x_a, x_b, z_a, z_b);
-// printf("n: %f %f %f\n", n.getX(), n.getY(), n.getZ());
-
-    n = normalize(n);
-
- // printf("nn: %f %f %f\n", n.getX(), n.getY(), n.getZ());
- // printf("\n");
-
     return normalize(n);
 }
 
@@ -317,12 +294,10 @@ static void GenerateVertexData(TerrainPatch* patch)
 
     float* positions; uint32_t positions_stride;
     float* normals; uint32_t normals_stride;
-    float* texcoords; uint32_t texcoords_stride;
     uint8_t* colors; uint32_t colors_stride;
     GetStreams(patch->m_Buffer,
                 positions, positions_stride,
                 normals, normals_stride,
-                texcoords, texcoords_stride,
                 colors, colors_stride);
 
 
@@ -369,25 +344,20 @@ static void GenerateVertexData(TerrainPatch* patch)
             Vector3 n2 = GetNormal(patch, x + 1, z + 1);
             Vector3 n3 = GetNormal(patch, x + 1, z);
 
-            Vector3 uv0 = Vector3(0,1,0);
-            Vector3 uv1 = Vector3(0,1,0);
-            Vector3 uv2 = Vector3(0,1,0);
-            Vector3 uv3 = Vector3(0,1,0);
-
             uint8_t col0[3] = {255,255,255};
             uint8_t col1[3] = {255,255,255};
             uint8_t col2[3] = {255,255,255};
             uint8_t col3[3] = {255,255,255};
 
-            #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; texcoords += texcoords_stride; colors += colors_stride;
+            #define INCREMENT_STRIDE() positions += positions_stride; normals += normals_stride; colors += colors_stride;
 
-            SetVertex(p0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(p1, n1, uv1, col1, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(p2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(p0, n0, col0, positions, normals, colors); INCREMENT_STRIDE();
+            SetVertex(p1, n1, col1, positions, normals, colors); INCREMENT_STRIDE();
+            SetVertex(p2, n2, col2, positions, normals, colors); INCREMENT_STRIDE();
 
-            SetVertex(p2, n2, uv2, col2, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(p3, n3, uv3, col3, positions, normals, texcoords, colors); INCREMENT_STRIDE();
-            SetVertex(p0, n0, uv0, col0, positions, normals, texcoords, colors); INCREMENT_STRIDE();
+            SetVertex(p2, n2, col2, positions, normals, colors); INCREMENT_STRIDE();
+            SetVertex(p3, n3, col3, positions, normals, colors); INCREMENT_STRIDE();
+            SetVertex(p0, n0, col0, positions, normals, colors); INCREMENT_STRIDE();
 
             #undef INCREMENT_STRIDE
         }
@@ -428,15 +398,11 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
     dmBuffer::StreamDeclaration streams_decl[] = {
         {VERTEX_STREAM_NAME_POSITION, dmBuffer::VALUE_TYPE_FLOAT32, 3},
         {VERTEX_STREAM_NAME_NORMAL, dmBuffer::VALUE_TYPE_FLOAT32, 3},
-        {VERTEX_STREAM_NAME_TEXCOORD, dmBuffer::VALUE_TYPE_FLOAT32, 2},
         {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_UINT8, 3},
     };
 
     // num triangles: num_quads * num_triangles per quad * num vertices per triangle
     uint32_t element_count = (patch_size*patch_size) * 2 * 3;
-
-    // dmLogWarning("patch_size: %u", patch_size);
-    // dmLogWarning("element_count: %u", element_count);
 
     dmBuffer::Result r = dmBuffer::Create(element_count, streams_decl, sizeof(streams_decl)/sizeof(dmBuffer::StreamDeclaration), buffer);
     if (r != dmBuffer::RESULT_OK)
@@ -448,6 +414,7 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
 
 static void PutWork(HTerrain terrain, TerrainWork item)
 {
+    DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
     if (terrain->m_Work.Full())
         terrain->m_Work.OffsetCapacity(9*2);
     terrain->m_Work.Push(item);
@@ -582,9 +549,12 @@ void Destroy(HTerrain terrain)
     // Exit the thread
     terrain->m_ThreadActive = false;
     dmMutex::Lock(terrain->m_ThreadMutex);
+
+    printf("Exiting: Signalling thread...\n");
     dmConditionVariable::Signal(terrain->m_ThreadCondition);
     dmMutex::Unlock(terrain->m_ThreadMutex);
     // wait for it
+    printf("Exiting: Joining thread...\n");
     dmThread::Join(terrain->m_Thread);
 
     dmConditionVariable::Delete(terrain->m_ThreadCondition);
@@ -651,10 +621,14 @@ static void TerrainThread(void* ctx)
     {
         // Lock and sleep until signaled there is jobs queued up
         dmMutex::ScopedLock lk(terrain->m_ThreadMutex);
-        while(terrain->m_Work.Empty() && !terrain->m_ThreadActive)
+        while(terrain->m_Work.Empty())
         {
+            printf("Thread entering sleep...\n");
             dmConditionVariable::Wait(terrain->m_ThreadCondition, terrain->m_ThreadMutex);
+            printf("Thread waking up!\n");
         }
+        if (!terrain->m_ThreadActive)
+            break;
 
         FlushWorkQueue(terrain, terrain->m_Work);
     }
@@ -697,9 +671,6 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
         int camera_diffz = camera_xz[1] - patch_lod->m_CameraXZ[1];
 
         bool camera_moved = camera_diffx!=0 || camera_diffz!= 0;
-
-        // if (!camera_moved)
-        //     continue;
 
         // if (camera_moved)
         // {
@@ -769,9 +740,47 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
     {
         TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
 
-        for (int z = -1; z <= 1; ++z)
+
+        // Since we want to prioritize the loading of the patch immediately in front of the camera
+        // we want to sort the patches. However, since
+
+        int idx[8*9] = {
+            4, 5, 2, 8, 1, 7, 0, 3, 6,  // dir:  1, 0, 0  East
+            4, 2, 1, 5, 0, 8, 3, 7, 6,  // dir:  1, 0,-1  NorthEast
+            4, 1, 0, 2, 3, 5, 6, 7, 8,  // dir: 0, 0, -1  North
+            4, 0, 1, 3, 6, 2, 7, 5, 8,  // dir: -1, 0,-1  NorthWest
+            4, 3, 6, 0, 7, 1, 8, 5, 2,  // dir: -1, 0, 0  West
+            4, 6, 3, 7, 0, 8, 1, 5, 2,  // dir: -1, 0, 1  SouthWest
+            4, 7, 6, 8, 3, 5, 0, 1, 2,  // dir: 0, 0,  1  South
+            4, 8, 7, 5, 6, 2, 3, 1, 0,  // dir:  1, 0, 1  SouthEast
+        };
+
+        const char* octantnames[8] = {
+            "East",
+            "NorthEast",
+            "North",
+            "NorthWest",
+            "West",
+            "SouthWest",
+            "South",
+            "SouthEast",
+        };
+
+        // figure out the quadrant that the camera direction is pointing at
+        float camdirx = terrain->m_CameraDir.getX();
+        float camdirz = -terrain->m_CameraDir.getZ(); // we want negative Z to be "north"
+        float a = atan2f(camdirz, camdirx);
+        int octant = int( 8 * a / (2*M_PI) + 8.5f ) % 8;
+
+        //printf("octant: %s\n", octantnames[octant]);
+
+        for (int i = 0; i < 9; ++i)
+        //for (int z = -1; z <= 1; ++z)
         {
-            for (int x = -1; x <= 1; ++x)
+            int index = idx[octant*9 + i];
+            int x = index % 3 - 1;
+            int z = index / 3 - 1;
+            //for (int x = -1; x <= 1; ++x)
             {
                 if (!IsPatchOccupied(patch_lod, x, z))
                 {
@@ -808,6 +817,7 @@ void Update(HTerrain terrain, const UpdateParams& params)
 
     Matrix4 invView = inverse(params.m_View);
     terrain->m_CameraPos = invView.getCol(3).getXYZ();
+    terrain->m_CameraDir = -invView.getCol(2).getXYZ();
 
     UpdatePatches(terrain, terrain->m_CameraPos);
 
