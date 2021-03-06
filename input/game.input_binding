@@ -38,6 +38,10 @@ key_trigger {
   input: KEY_9
   action: "TOGGLE_WIREFRAME"
 }
+key_trigger {
+  input: KEY_1
+  action: "TERRAIN_RECALC"
+}
 mouse_trigger {
   input: MOUSE_BUTTON_1
   action: "MOUSE_BUTTON_1"

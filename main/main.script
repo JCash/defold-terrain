@@ -1,6 +1,7 @@
 local terrain_helper = require("defold-terrain/scripts/helper")
 local rendercam = require("rendercam.rendercam")
 
+
 local function terrain_listener(self, event, data)
 	if event == terrain.TERRAIN_PATCH_SHOW then
 		if self.one then
@@ -9,19 +10,34 @@ local function terrain_listener(self, event, data)
 
 		--self.one = true
 
-		local id = table.remove(self.free_meshes)
-		local mesh_url = msg.url(nil, id, "mesh")
+		local mesh_id = table.remove(self.free_meshes)
+		local mesh_url = msg.url(nil, mesh_id, "mesh")
 		--mesh_url = msg.url("terrain#mesh_lod0_0")
 
-		pprint("callback", mesh_url, event, data)
+		--pprint("callback", mesh_url, event, data)
+		print("SHOW", mesh_id, data.id, mesh_url, data.position)
 
 		-- any time spent here is for uploading the vertex buffer
-		go.set_position(data.position, msg.url(nil, id, nil))
+		go.set_position(data.position, mesh_id)
 		local res = go.get(mesh_url, "vertices")
 		resource.set_buffer(res, data.buffer)
 
-		local index = data.z * 65536 + data.x
-		table.insert(self.patches[0], index, mesh_url)
+		data.mesh_id = mesh_id
+		self.patches[0][data.id] = data
+		-- for k, _ in pairs(self.patches[0]) do
+		-- 	print("MAWE", "key", k)
+		-- end
+		--pprint("PATCHES", self.patches[0])
+	elseif event == terrain.TERRAIN_PATCH_HIDE then
+		print("MAWE", "hide patch", data.id, "pos", data.x, data.z)
+		--pprint("PATCHES", data.id, self.patches[0])
+		-- for k, _ in pairs(self.patches[0]) do
+		-- 	print("MAWE", "key", k)
+		-- end
+		local patch_data = self.patches[0][data.id]
+		--print("Readding mesh_id", patch_data.mesh_id)
+		table.insert(self.free_meshes, patch_data.mesh_id)
+		self.patches[0][data.id] = nil
 	end
 end
 
@@ -41,42 +57,20 @@ function init(self)
 	self.patches[0] = {} -- lod 0
 
 	local patches = collectionfactory.create("terrain#collectionfactory")
-	pprint("PATCHES", patches)
-	
+	--pprint("PATCHES", patches)
+
 	self.free_meshes = {}
 
 	for _, v in pairs(patches) do
 		table.insert(self.free_meshes, v)
 	end
+end
 
-
-	--local b = terrain_helper.create_patch_flat(128,3.95)
-
-	--print(b)
-	--[[
-	local res = nil
-
-	res = go.get("terrain#mesh_lod0_0", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_1", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_2", "vertices")
-	resource.set_buffer(res, b)
-
-	res = go.get("terrain#mesh_lod0_3", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_4", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_5", "vertices")
-	resource.set_buffer(res, b)
-
-	res = go.get("terrain#mesh_lod0_6", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_7", "vertices")
-	resource.set_buffer(res, b)
-	res = go.get("terrain#mesh_lod0_8", "vertices")
-	resource.set_buffer(res, b)
-	--]]
+local function reload_terrain(self)
+	for k, v in pairs(self.patches[0]) do
+		print("reload", k, v)
+		terrain.reload_patch(v.ptr)
+	end
 end
 
 function final(self)
@@ -88,6 +82,12 @@ end
 function update(self, dt)
 	if terrain then
 		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
+
+		local inv = vmath.inv(terrain_data.view)
+		local pos = vmath.vector3(inv.m03, inv.m13, inv.m23)
+		local dir = vmath.vector3(-inv.m02, -inv.m12, -inv.m22)
+		msg.post("main#gui", "set_position", {position = pos, direction = dir})
+		
 		terrain.update(dt, terrain_data)
 	end
 end
@@ -99,5 +99,7 @@ function on_input(self, action_id, action)
 	elseif action_id == hash("TOGGLE_WIREFRAME") and action.pressed then
 		self.profiler_enabled = not self.profiler_enabled
 		msg.post("@render:", "gfx_dbg_toggle", {'wireframe'})
+	elseif action_id == hash("TERRAIN_RECALC") and action.pressed then
+		reload_terrain(self)
 	end
 end

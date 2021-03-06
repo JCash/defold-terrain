@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <dmsdk/dlib/math.h>
+#include <dmsdk/dlib/time.h>
 #include "terrain_private.h"
 #include "loader_file.h"
 #include "terrain.h"
@@ -155,8 +157,8 @@ static void FillFlatBuffer(uint32_t patch_size, float* positions, uint32_t posit
 static float GenerateHeight(uint32_t seed, float x, float z)
 {
     int num_octaves = 6;
-    float frequency = 1.0f;
-    float lacunarity = 1.5f;
+    float frequency = 1.5f;
+    float lacunarity = 1.2f;
     float amplitude = 0.5f;
     float gain = 0.5f;
 
@@ -214,8 +216,24 @@ static Vector3 GetNormal(TerrainPatch* patch, int x, int z)
     return normalize(n);
 }
 
+struct TimerScope
+{
+    TimerScope(const char* name) {
+        m_Name = name;
+        m_TimeStart = dmTime::GetTime();
+    }
+    ~TimerScope() {
+        uint64_t time_end = dmTime::GetTime();
+        printf("Scope '%s' took %f ms\n", m_Name, (time_end - m_TimeStart)/1000.0f);
+    }
+    const char* m_Name;
+    uint64_t m_TimeStart;
+};
+
 static void GeneratePatchHeights(TerrainPatch* patch)
 {
+    TimerScope tscope(__FUNCTION__);
+
     uint32_t seed = patch->m_HeightSeed;
     float wx = patch->m_XZ[0];
     float wz = patch->m_XZ[1];
@@ -226,12 +244,11 @@ static void GeneratePatchHeights(TerrainPatch* patch)
     float oo_patch_size_f = 1.0f / patch_size;
 
     int size = num_verts+2; // we have an extra border in order to get correct normal values
-    patch->m_Heightmap = new uint16_t[size * size];
+    if (patch->m_Heightmap == 0)
+        patch->m_Heightmap = new uint16_t[size * size];
 
     patch->m_HeightMin = 65535;
     patch->m_HeightMax = 0;
-
-    //printf("XZ: %d %d\n", patch->m_XZ[0], patch->m_XZ[1]);
 
 
     for (int x = -1; x < num_verts+1; ++x)
@@ -281,11 +298,17 @@ static void GeneratePatchHeights(TerrainPatch* patch)
         }
     }
 
+    patch->m_IsDataLoaded = 1;
+    printf("XZ: %d %d  height 0,0: %u \n", patch->m_XZ[0], patch->m_XZ[1], patch->m_Heightmap[0]);
+
+
     //printf("HEIGHT min/max: %f %f\n", height_min, height_max);
 }
 
 static void GenerateVertexData(TerrainPatch* patch)
 {
+    TimerScope tscope(__FUNCTION__);
+
     float* positions; uint32_t positions_stride;
     float* normals; uint32_t normals_stride;
     float* texcoords; uint32_t texcoords_stride;
@@ -303,8 +326,8 @@ static void GenerateVertexData(TerrainPatch* patch)
     float wx = patch->m_XZ[0];
     float wz = patch->m_XZ[1];
 
-    printf("******************************************\n");
-    printf("XZ: %d %d  patch_size: %u\n", patch->m_XZ[0], patch->m_XZ[1], patch_size);
+    //printf("******************************************\n");
+    //printf("XZ: %d %d  patch_size: %u\n", patch->m_XZ[0], patch->m_XZ[1], patch_size);
 
     uint32_t world_size = 65536;
 
@@ -365,18 +388,21 @@ static void GenerateVertexData(TerrainPatch* patch)
 }
 
 
-static bool PatchLoadGenerate(TerrainPatch* patch)
+static bool DoPatchLoad(TerrainPatch* patch)
 {
     int patch_size = GetPatchSize(0);
 
     if (patch->m_Generate)
     {
-        if (patch->m_Heightmap == 0) {
+        if (!patch->m_IsDataLoaded) {
             GeneratePatchHeights(patch);
             return false;
         }
 
         GenerateVertexData(patch);
+
+        patch->m_IsLoading = 0;
+        patch->m_IsLoaded = 1;
         return true;
     }
 
@@ -413,10 +439,65 @@ static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
     }
 }
 
+static void PutWork(HTerrain terrain, TerrainWork item)
+{
+    if (terrain->m_Work.Full())
+        terrain->m_Work.OffsetCapacity(9*2);
+    terrain->m_Work.Push(item);
+}
+
+void PatchLoad(HTerrain terrain, TerrainPatch* patch)
+{
+    TerrainWork item;
+    item.m_Type = TERRAIN_WORK_LOAD;
+    item.m_Patch = patch;
+    item.m_IsDone = 0;
+    item.m_Generate = patch->m_Generate;
+    patch->m_IsLoading = 1;
+    patch->m_IsLoaded = 0;
+    patch->m_Delete = 0;
+    PutWork(terrain, item);
+}
+
+
+void PatchUnload(HTerrain terrain, TerrainPatch* patch)
+{
+    TerrainWork item;
+    item.m_Type = TERRAIN_WORK_UNLOAD;
+    item.m_Patch = patch;
+    item.m_IsDone = 0;
+    item.m_Generate = patch->m_Generate;
+    PutWork(terrain, item);
+}
+
+static bool DoPatchUnload(HTerrain terrain, TerrainPatch* patch)
+{
+    patch->m_IsDataLoaded = 0;
+    patch->m_IsLoaded = 0;
+    patch->m_Delete = 0;
+    return true;
+}
+
+
+static void PatchDelete(TerrainPatch* patch)
+{
+    delete[] patch->m_Heightmap;
+}
+
+// Coords in [-1,1] range (i.e. around the camera)
+static bool IsPatchOccupied(TerrainPatchLod* patch_lod, int x, int z)
+{
+    return patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)];
+}
+// Coords in [-1,1] range (i.e. around the camera)
+static void SetPatchOccupied(TerrainPatchLod* patch_lod, int x, int z, bool loaded)
+{
+    //printf("SetPatchOccupied %d %d: %d\n", x, z, (int)loaded);
+    patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)] = loaded;
+}
 
 HTerrain Create(const InitParams& params)
 {
-
     assert(params.m_Callback != 0);
 
 //printf("HACK: params.m_BasePatchSize: %u\n", params.m_BasePatchSize);
@@ -440,51 +521,39 @@ HTerrain Create(const InitParams& params)
 
     int patch_size = GetPatchSize(0);
 
-    // Initialize work
-    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    // Initialize patches
+    for (int lod = 0, id = 0; lod < NUM_LOD_LEVELS; ++lod)
     {
-        int camera_xz[2];
-        WorldToPatchCoord(camera_pos, lod, camera_xz);
+        TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
+
+        WorldToPatchCoord(camera_pos, lod, patch_lod->m_CameraXZ);
 
         for (int x = -1, i = 0; x <= 1; ++x)
         {
-            for (int z = -1; z <= 1; ++z, ++i)
+            for (int z = -1; z <= 1; ++z, ++i, ++id)
             {
-                // if (x == -1 || x == 1)
-                // {
-                //     if (z == -1 || z == 1)
-                //         continue;
-                // }
-
-                // if (!(x == -1 && z == 0))
-                //     continue;
+                SetPatchOccupied(patch_lod, x, z, false);
 
                 TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
-
-                dmRng::Init(&patch->m_Rng, dmRng::RandU32(&terrain->m_Rng));
+                patch->m_Id = id;
                 patch->m_HeightSeed = terrain_seed; // duplicate, but makes it easier to access on threads
-
                 patch->m_Lod = lod;
-                patch->m_XZ[0] = camera_xz[0] + x;
-                patch->m_XZ[1] = camera_xz[1] + z;
-
                 patch->m_IsLoaded = 0;
-                patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
+                patch->m_Delete = 0;
+                patch->m_IsLoading = 0;
+                patch->m_IsDataLoaded = 0;
+                patch->m_Heightmap = 0;
+
+                patch->m_Generate = 1; // pass in option for this in the init function
 
                 CreateBuffer(&patch->m_Buffer, patch_size);
 
-                patch->m_Generate = 1;
-                patch->m_Heightmap = 0;
+                // patch->m_XZ[0] = patch_lod->m_CameraXZ[0] + x;
+                // patch->m_XZ[1] = patch_lod->m_CameraXZ[1] + z;
 
-                TerrainWork item;
-                item.m_Type = TERRAIN_WORK_LOAD;
-                item.m_Patch = patch;
-                item.m_IsDone = 0;
-                item.m_Generate = patch->m_Generate;
+                // patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
 
-                if (terrain->m_Work.Full())
-                    terrain->m_Work.OffsetCapacity(9*2);
-                terrain->m_Work.Push(item);
+                // dmRng::Init(&patch->m_Rng, dmRng::RandU32(&terrain->m_Rng));
             }
         }
     }
@@ -504,6 +573,15 @@ void Destroy(HTerrain terrain)
     if (terrain->m_LoaderContext)
         RawFileLoader_Exit(terrain->m_LoaderContext);
 
+    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    {
+        for (int i = 0; i < 9; ++i)
+        {
+            TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
+            PatchDelete(patch);
+        }
+    }
+
     delete terrain;
 }
 
@@ -515,36 +593,190 @@ static void FlushWorkQueue(HTerrain terrain, dmArray<TerrainWork>& commands)
         TerrainWork& cmd = commands[i];
         TerrainPatch* patch = cmd.m_Patch;
 
+        bool isloaded = patch->m_IsLoaded;
+
         if (cmd.m_Type == TERRAIN_WORK_LOAD)
         {
-            if (patch->m_Generate) {
-                cmd.m_IsDone = PatchLoadGenerate(patch);
-            } else {
-                //cmd.m_IsDone = true;
-                //cmd.m_Type = fail?
+            cmd.m_IsDone = DoPatchLoad(patch);
+            if (cmd.m_IsDone && patch->m_Delete)
+            {
+                patch->m_IsLoaded = 0; // don't trigger a callback
+                PatchUnload(terrain, patch);
             }
+        }
+        else if (cmd.m_Type == TERRAIN_WORK_UNLOAD)
+        {
+            cmd.m_IsDone = DoPatchUnload(terrain, patch);
         }
 
         if (!cmd.m_IsDone)
             continue;
 
-        if (cmd.m_Type == TERRAIN_WORK_LOAD)
+        // Change in state, do the callbacks
+        if (isloaded != patch->m_IsLoaded)
         {
-            terrain->m_Callback(TERRAIN_PATCH_SHOW, patch);
+            if (patch->m_IsLoaded)
+                terrain->m_Callback(TERRAIN_PATCH_SHOW, patch);
+            else
+                terrain->m_Callback(TERRAIN_PATCH_HIDE, patch);
         }
+
         commands.EraseSwap(i);
         --i;
         --size;
     }
 }
 
+static inline bool IsPatchFree(TerrainPatch* patch)
+{
+    return !patch->m_IsLoading && !patch->m_IsLoaded;
+}
+
+static TerrainPatch* FindFreePatch(HTerrain terrain, int lod)
+{
+    for (int i = 0; i < 9; ++i)
+    {
+        TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
+        if (IsPatchFree(patch))
+            return patch;
+    }
+    return 0;
+}
+
+static inline int Sign(int value)
+{
+    return value > 0 ? 1 : -1;
+}
+
+// update camera position
+// mark patches as discarded
+// Allow empty patches to load
+static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
+{
+    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    {
+        TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
+
+        int camera_xz[2];
+        WorldToPatchCoord(camera_pos, lod, camera_xz);
+
+        int camera_diffx = camera_xz[0] - patch_lod->m_CameraXZ[0];
+        int camera_diffz = camera_xz[1] - patch_lod->m_CameraXZ[1];
+
+        bool camera_moved = camera_diffx!=0 || camera_diffz!= 0;
+
+        // if (!camera_moved)
+        //     continue;
+
+        // if (camera_moved)
+        // {
+        //     dmLogWarning("Camera was at %d %d, moved to %d %d  diff: %d %d  sign: %d %d  pos: %.3f %.3f %.3f",
+        //         patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1], camera_xz[0], camera_xz[1],
+        //         camera_diffx, camera_diffz, Sign(camera_diffx), Sign(camera_diffz),
+        //         camera_pos.getX(), camera_pos.getY(), camera_pos.getZ());
+        // }
+
+        patch_lod->m_CameraXZ[0] = camera_xz[0];
+        patch_lod->m_CameraXZ[1] = camera_xz[1];
+
+        // Mark the new slots as missing
+        if (camera_diffx != 0)
+        {
+            SetPatchOccupied(patch_lod, Sign(camera_diffx), -1, false);
+            SetPatchOccupied(patch_lod, Sign(camera_diffx),  0, false);
+            SetPatchOccupied(patch_lod, Sign(camera_diffx),  1, false);
+        }
+        if (camera_diffz != 0)
+        {
+            SetPatchOccupied(patch_lod, -1, Sign(camera_diffz), false);
+            SetPatchOccupied(patch_lod,  0, Sign(camera_diffz), false);
+            SetPatchOccupied(patch_lod,  1, Sign(camera_diffz), false);
+        }
+
+        // if (camera_diffx || camera_diffz)
+        // {
+        //     printf("     x-1  x+0  x+1\n");
+        //     printf("z-1  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1, -1), IsPatchOccupied(patch_lod, 0, -1), IsPatchOccupied(patch_lod, 1, -1));
+        //     printf("z+0  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1,  0), IsPatchOccupied(patch_lod, 0,  0), IsPatchOccupied(patch_lod, 1,  0));
+        //     printf("z+1  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1, +1), IsPatchOccupied(patch_lod, 0, +1), IsPatchOccupied(patch_lod, 1, +1));
+        // }
+
+        for (int i = 0; i < 9; ++i)
+        {
+            TerrainPatch* patch = &patch_lod->m_Patches[i];
+
+            // Bounding box check
+
+            // find out if it's more than one step away from the camera position
+            int diffx = patch->m_XZ[0] - camera_xz[0];
+            int diffz = patch->m_XZ[1] - camera_xz[1];
+
+            // the the difference is positive, then the camera is moving in the positive direction
+            // and the next patch position should be before the camera in that same direction
+            int movex = dmMath::Abs(diffx) > 1 ? Sign(diffx) : 0;
+            int movez = dmMath::Abs(diffz) > 1 ? Sign(diffz) : 0;
+
+            if (movex || movez)
+            {
+                if (patch->m_IsLoading)
+                {
+                    patch->m_Delete = 1; // might possibly do an early out of the patch loader
+                    continue;
+                }
+                else if (patch->m_IsLoaded)
+                {
+                    PatchUnload(terrain, patch);
+                    continue;
+                }
+            }
+        }
+    }
+
+    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    {
+        TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
+
+        for (int z = -1; z <= 1; ++z)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                if (!IsPatchOccupied(patch_lod, x, z))
+                {
+                    TerrainPatch* patch = FindFreePatch(terrain, lod);
+                    if (patch)
+                    {
+                        // move this patch
+                        int newx = patch_lod->m_CameraXZ[0] + x;
+                        int newz = patch_lod->m_CameraXZ[1] + z;
+
+                        patch->m_XZ[0] = newx;
+                        patch->m_XZ[1] = newz;
+
+                        patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
+
+                        // printf("Loading patch: %d %d (%d %d)    pos: %.3f, %.3f  camera: %d %d\n",
+                        //     patch->m_XZ[0], patch->m_XZ[1], x, z, patch->m_Position.getX(), patch->m_Position.getZ(),
+                        //     patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
+
+                        PatchLoad(terrain, patch);
+
+                        SetPatchOccupied(patch_lod, x, z, true);
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 void Update(HTerrain terrain, const UpdateParams& params)
 {
-    Matrix4 prev_view = terrain->m_View;
-    Vector3 prev_camera_pos = (prev_view.getCol(3) * -1).getXYZ();
-    Vector3 camera_pos = (params.m_View.getCol(3) * -1).getXYZ();
     terrain->m_View = params.m_View;
+
+    Matrix4 invView = inverse(params.m_View);
+    terrain->m_CameraPos = invView.getCol(3).getXYZ();
+
+    UpdatePatches(terrain, terrain->m_CameraPos);
 
     FlushWorkQueue(terrain, terrain->m_Work);
 }

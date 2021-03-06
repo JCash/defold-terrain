@@ -1,18 +1,24 @@
 #pragma once
 #include <dmsdk/sdk.h>
+#include <dmsdk/dlib/align.h>
 #include "terrain.h"
 #include "rng.h"
 
 namespace dmTerrain {
 
-    struct TerrainPatchLod
+    struct DM_ALIGNED(16) TerrainPatchLod
     {
         TerrainPatch m_Patches[9];
+
+        int m_CameraXZ[2]; // The camera pos in patch space
+        bool m_PatchesOccupied[9];
     };
 
     enum TerrainWorkType
     {
         TERRAIN_WORK_LOAD,
+        TERRAIN_WORK_UNLOAD,
+        TERRAIN_WORK_RELOAD,
     };
 
     struct TerrainWork
@@ -25,11 +31,13 @@ namespace dmTerrain {
 
     const uint32_t NUM_LOD_LEVELS = 1; // Todo: make this configurable
 
-    struct TerrainWorld
+    struct DM_ALIGNED(16) TerrainWorld
     {
+        Matrix4 m_View;     // View matrix
+        Matrix4 m_Proj;     // Used for frustum culling (later on)
+        Vector3 m_CameraPos;// Camera position
+
         TerrainPatchLod m_Terrain[NUM_LOD_LEVELS];
-        Matrix4 m_View; // Camera position
-        Matrix4 m_Proj; // Used for frustum culling (later on)
 
         dmRng::Rng m_Rng;
 

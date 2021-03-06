@@ -25,6 +25,14 @@ ExtensionContext* g_TerrainWorld = 0;
 // ****************************************************************************************************************************************************************
 // callback functions
 
+// Get an id that the Lua side can use as a unique key in tables
+static int GetPatchID(const TerrainPatch* patch)
+{
+    //return (int)(dmHashBuffer64(&patch, sizeof(TerrainPatch*)) & 0xFFFFFFFF);
+    return (int)(uintptr_t)patch;
+}
+
+
 // Invoke the Lua callback
 static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch)
 {
@@ -44,6 +52,12 @@ static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch
     lua_pushnumber(L, (lua_Number)event);
 
     lua_newtable(L);
+
+    lua_pushinteger(L, patch->m_Id);
+    lua_setfield(L, -2, "id");
+
+    lua_pushlightuserdata(L, (void*)patch);
+    lua_setfield(L, -2, "ptr");
 
     lua_pushinteger(L, patch->m_XZ[0]);
     lua_setfield(L, -2, "x");
@@ -104,7 +118,6 @@ static int Terrain_Init(lua_State* L)
     init_params.m_Callback = Terrain_Callback;
     init_params.m_BasePatchSize = 512;
 
-    Vector3 camera_pos = Vector3(0);
     if (lua_istable(L, 2))
     {
         lua_pushvalue(L, 2);
@@ -113,7 +126,6 @@ static int Terrain_Init(lua_State* L)
         Matrix4* view = dmScript::ToMatrix4(L, -1);
         if (view) {
             init_params.m_View = *view;
-            camera_pos = (view->getCol(3) * -1).getXYZ();
         }
         lua_pop(L, 1);
 
@@ -127,6 +139,8 @@ static int Terrain_Init(lua_State* L)
     }
 
     world->m_Terrain = dmTerrain::Create(init_params);
+
+    printf("terrain.init()\n");
 
     return 0;
 }
@@ -182,11 +196,28 @@ static int Terrain_Update(lua_State* L)
     return 0;
 }
 
+static int Terrain_Reload(lua_State* L)
+{
+    DM_LUA_STACK_CHECK(L, 0);
+
+    if (!lua_islightuserdata(L, 1))
+        return DM_LUA_ERROR("Argument must be the terrain patch pointer");
+
+    TerrainPatch* patch = (TerrainPatch*)lua_touserdata(L, 1);
+    printf("reload patch: %p\n", patch);
+
+    ExtensionContext* world = g_TerrainWorld;
+    dmTerrain::PatchUnload(world->m_Terrain, patch);
+
+    return 0;
+}
+
 // Functions exposed to Lua
 static const luaL_reg Module_methods[] =
 {
     {"init", Terrain_Init},
     {"update", Terrain_Update},
+    {"reload_patch", Terrain_Reload},
     {"exit", Terrain_Exit},
     {0, 0}
 };
