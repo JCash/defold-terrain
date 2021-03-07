@@ -548,13 +548,12 @@ void Destroy(HTerrain terrain)
 
     // Exit the thread
     terrain->m_ThreadActive = false;
-    dmMutex::Lock(terrain->m_ThreadMutex);
 
-    printf("Exiting: Signalling thread...\n");
+    dmMutex::Lock(terrain->m_ThreadMutex);
     dmConditionVariable::Signal(terrain->m_ThreadCondition);
     dmMutex::Unlock(terrain->m_ThreadMutex);
+
     // wait for it
-    printf("Exiting: Joining thread...\n");
     dmThread::Join(terrain->m_Thread);
 
     dmConditionVariable::Delete(terrain->m_ThreadCondition);
@@ -620,18 +619,23 @@ static void TerrainThread(void* ctx)
     while (terrain->m_ThreadActive)
     {
         // Lock and sleep until signaled there is jobs queued up
-        dmMutex::ScopedLock lk(terrain->m_ThreadMutex);
-        while(terrain->m_Work.Empty())
+        DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+        while(terrain->m_Work.Empty() && terrain->m_ThreadActive)
         {
             printf("Thread entering sleep...\n");
+            fflush(stdout);
             dmConditionVariable::Wait(terrain->m_ThreadCondition, terrain->m_ThreadMutex);
             printf("Thread waking up!\n");
+            fflush(stdout);
         }
         if (!terrain->m_ThreadActive)
             break;
 
         FlushWorkQueue(terrain, terrain->m_Work);
     }
+
+    printf("Thread exited!\n");
+    fflush(stdout);
 }
 
 static inline bool IsPatchFree(TerrainPatch* patch)
