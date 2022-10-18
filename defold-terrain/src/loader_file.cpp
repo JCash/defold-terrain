@@ -1,4 +1,4 @@
-#include <dlib/log.h>
+#include <dmsdk/dlib/log.h>
 #include "terrain_private.h"
 #include <stdio.h>
 #include <stdint.h>

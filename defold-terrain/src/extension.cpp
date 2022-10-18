@@ -69,8 +69,8 @@ static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch
 
     dmScript::PushVector3(L, patch->m_Position);
     lua_setfield(L, -2, "position");
-
-    dmScript::LuaHBuffer luabuf = {patch->m_Buffer, dmScript::OWNER_C};
+    
+    dmScript::LuaHBuffer luabuf(patch->m_Buffer, dmScript::OWNER_C);
     dmScript::PushBuffer(L, luabuf);
     lua_setfield(L, -2, "buffer");
 
