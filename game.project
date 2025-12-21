@@ -1,5 +1,6 @@
 [bootstrap]
 main_collection = /main/main.collectionc
+render = /main/debug.renderc
 
 [script]
 shared_state = 1
@@ -13,7 +14,7 @@ input_method = HiddenInputField
 package = com.defold.example.basic3d
 
 [project]
-dependencies =
+dependencies = 
 title = defold-terrain
 
 [physics]
