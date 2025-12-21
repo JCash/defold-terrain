@@ -1,5 +1,4 @@
 local terrain_helper = require("defold-terrain/scripts/helper")
-local rendercam = require("rendercam.rendercam")
 
 
 local function terrain_listener(self, event, data)
@@ -47,9 +46,14 @@ function init(self)
 
 	self.one = false
 
+	self.camera = msg.url("/camera#camera")
+	self.camera_go = msg.url("/camera")
+
 	if terrain then
 		self.patch_size = 512 --lod 0
-		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
+		local view = go.get(self.camera, "view")
+		local proj = go.get(self.camera, "projection")
+		local terrain_data = { view = view, proj = proj }
 		terrain.init(terrain_listener, terrain_data)
 	end
 
@@ -85,7 +89,11 @@ end
 
 function update(self, dt)
 	if terrain then
-		local terrain_data = { view = rendercam.view, proj = rendercam.proj }
+		local view = go.get(self.camera, "view")
+		local proj = go.get(self.camera, "projection")
+		local terrain_data = { view = view, proj = proj }
+
+		-- TODO: Use the GO rotation to figure out the direction
 
 		local inv = vmath.inv(terrain_data.view)
 		local pos = vmath.vector3(inv.m03, inv.m13, inv.m23)
