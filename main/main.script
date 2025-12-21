@@ -9,7 +9,7 @@ local function terrain_listener(self, event, data)
 
 		--self.one = true
 
-		local mesh_id = table.remove(self.free_meshes)
+		local mesh_id = table.remove(self.free_meshes)		
 		local mesh_url = msg.url(nil, mesh_id, "mesh")
 		--mesh_url = msg.url("terrain#mesh_lod0_0")
 
@@ -55,23 +55,68 @@ function init(self)
 		local proj = go.get(self.camera, "projection")
 		local terrain_data = { view = view, proj = proj }
 		terrain.init(terrain_listener, terrain_data)
+	else
+		print("RUNNING VANILLA ENGINE!!!")
+		return
 	end
 
 	-- patches in use
 	self.patches = {}
 	self.patches[0] = {} -- lod 0
 
-	local patches = collectionfactory.create("terrain#collectionfactory")
-	--pprint("PATCHES", patches)
-
+	-- pool of free patches (used for all lods)
 	self.free_meshes = {}
 
-	for _, v in pairs(patches) do
-		local mesh_url = msg.url(nil, v, "mesh")
+	-- we need 9 patches for each lod
+	for i=1,9 do
+		local go_id = factory.create("terrain#patchfactory")
+		local mesh_url = msg.url(nil, go_id, "mesh")
+
+		-- each patch spawns with a empty buffer resource, so let's create a new one
+		-- and assign it
+		-- todo: Update the buffer api to allow for cloning a buffer (to get the correct format)
+		local buffer_handle = buffer.create(1, {
+				{
+					name  = hash("position"),
+					type  = buffer.VALUE_TYPE_FLOAT32,
+					count = 3
+				},
+				{
+					name = hash("normal"),
+					type  = buffer.VALUE_TYPE_FLOAT32,
+					count = 3
+				},
+				{
+					name = hash("color"),
+					type  = buffer.VALUE_TYPE_UINT8,
+					count = 3
+				}
+			})
+		
+		local resource_name = "/patchbuffer_" .. i .. ".bufferc"
+		--local resource_hash = hash("patchbuffer_" .. i .. ".bufferc")
+		local buf = resource.create_buffer(resource_name, { buffer = buffer_handle })
+		go.set(mesh_url, "vertices", buf)
+
+		print("MAWE", i, ":", mesh_url, resource_name, buf)
+		
+		-- todo: the dims should be set after grabbing it from the pool (i.e. not here)
+		-- so that it can be used with any lod
 		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
 		go.set(mesh_url, "dims", dims)
-		table.insert(self.free_meshes, v)
+		
+		table.insert(self.free_meshes, go_id)
 	end
+
+-- 	local patches = collectionfactory.create("terrain#collectionfactory")
+-- 	
+-- 	for _, v in pairs(patches) do
+-- 		local mesh_url = msg.url(nil, v, "mesh")
+-- 		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
+-- 		go.set(mesh_url, "dims", dims)
+-- 		table.insert(self.free_meshes, v)
+-- 	end
+-- 
 end
 
 local function reload_terrain(self)
