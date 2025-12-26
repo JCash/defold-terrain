@@ -5,13 +5,20 @@
 
 #define MODULE_NAME "terrain"
 
+#if defined(TERRAIN_DEBUG)
+    #define TRACE printf
+#else
+    #define TRACE (void)
+#endif
+
+
 namespace dmTerrain {
 
 
 struct TerrainCommand
 {
     TerrainEvents m_Event;
-    const TerrainPatch* m_Patch;
+    TerrainPatch* m_Patch;
 };
 
 struct ExtensionContext
@@ -26,16 +33,8 @@ ExtensionContext* g_TerrainWorld = 0;
 // ****************************************************************************************************************************************************************
 // callback functions
 
-// Get an id that the Lua side can use as a unique key in tables
-static int GetPatchID(const TerrainPatch* patch)
-{
-    //return (int)(dmHashBuffer64(&patch, sizeof(TerrainPatch*)) & 0xFFFFFFFF);
-    return (int)(uintptr_t)patch;
-}
-
-
 // Invoke the Lua callback
-static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch)
+static void Terrain_PatchCallback(TerrainEvents event, TerrainPatch* patch)
 {
     ExtensionContext* world = g_TerrainWorld;
     if (!dmScript::IsCallbackValid(world->m_Callback))
@@ -57,8 +56,8 @@ static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch
     lua_pushinteger(L, patch->m_Id);
     lua_setfield(L, -2, "id");
 
-    lua_pushlightuserdata(L, (void*)patch);
-    lua_setfield(L, -2, "ptr");
+    // lua_pushlightuserdata(L, (void*)patch);
+    // lua_setfield(L, -2, "ptr");
 
     lua_pushinteger(L, patch->m_XZ[0]);
     lua_setfield(L, -2, "x");
@@ -77,10 +76,12 @@ static void Terrain_PatchCallback(TerrainEvents event, const TerrainPatch* patch
     dmScript::PCall(L, 3, 0); // self + # user arguments
 
     dmScript::TeardownCallback(world->m_Callback);
+
+    dmAtomicStore32(&patch->m_LuaCallback, 1);
 }
 
 // Callbacks from the terrain system
-static void Terrain_Callback(TerrainEvents event, const TerrainPatch* patch)
+static void Terrain_Callback(TerrainEvents event, TerrainPatch* patch)
 {
     ExtensionContext* world = g_TerrainWorld;
     TerrainCommand cmd;
@@ -204,12 +205,20 @@ static int Terrain_Reload(lua_State* L)
     if (!lua_islightuserdata(L, 1))
         return DM_LUA_ERROR("Argument must be the terrain patch pointer");
 
-    TerrainPatch* patch = (TerrainPatch*)lua_touserdata(L, 1);
-    printf("reload patch: %p\n", patch);
+    int id = luaL_checkinteger(L, 1);
+    printf("reload patch: %d\n", id);
 
     ExtensionContext* world = g_TerrainWorld;
-    dmTerrain::PatchUnload(world->m_Terrain, patch);
+    //dmTerrain::PatchUnload(world->m_Terrain, patch);
 
+    return 0;
+}
+
+static int Terrain_DebugPrint(lua_State* L)
+{
+    DM_LUA_STACK_CHECK(L, 0);
+    ExtensionContext* world = g_TerrainWorld;
+    dmTerrain::DebugPrint(world->m_Terrain);
     return 0;
 }
 
@@ -219,6 +228,7 @@ static const luaL_reg Module_methods[] =
     {"init", Terrain_Init},
     {"update", Terrain_Update},
     {"reload_patch", Terrain_Reload},
+    {"debug_print", Terrain_DebugPrint},
     {"exit", Terrain_Exit},
     {0, 0}
 };

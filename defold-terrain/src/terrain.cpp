@@ -21,6 +21,7 @@ static float UNSIGNED_TO_HEIGHT_FACTOR = HEIGHT_SCALE / 65535.0f;
 int PATCH_SIZES[NUM_LOD_LEVELS];
 
 static void TerrainThread(void* ctx);
+static void UpdatePatches(HTerrain terrain, Vector3 camera_pos);
 
 int GetPatchSize(int lod)
 {
@@ -43,18 +44,18 @@ Vector3 PatchToWorldCoord(int xz[2], uint32_t lod)
 
 // https://stackoverflow.com/a/34960913/468516
 // hartmann/gribbs
-void extract_planes_from_projmat(
-        const float mat[4][4],
-        float left[4], float right[4], float top[4], float bottom[4],
-        float near[4], float far[4])
-{
-    for (int i = 4; i--; ) left[i]      = mat[i][3] + mat[i][0];
-    for (int i = 4; i--; ) right[i]     = mat[i][3] - mat[i][0];
-    for (int i = 4; i--; ) bottom[i]    = mat[i][3] + mat[i][1];
-    for (int i = 4; i--; ) top[i]       = mat[i][3] - mat[i][1];
-    for (int i = 4; i--; ) near[i]      = mat[i][3] + mat[i][2];
-    for (int i = 4; i--; ) far[i]       = mat[i][3] - mat[i][2];
-}
+// void extract_planes_from_projmat(
+//         const float mat[4][4],
+//         float left[4], float right[4], float top[4], float bottom[4],
+//         float near[4], float far[4])
+// {
+//     for (int i = 4; i--; ) left[i]      = mat[i][3] + mat[i][0];
+//     for (int i = 4; i--; ) right[i]     = mat[i][3] - mat[i][0];
+//     for (int i = 4; i--; ) bottom[i]    = mat[i][3] + mat[i][1];
+//     for (int i = 4; i--; ) top[i]       = mat[i][3] - mat[i][1];
+//     for (int i = 4; i--; ) near[i]      = mat[i][3] + mat[i][2];
+//     for (int i = 4; i--; ) far[i]       = mat[i][3] - mat[i][2];
+// }
 
 static inline void SetVertex(const Vector3& p, const Vector3& n, const uint8_t* c,
                             float* positions, float* normals, uint8_t* colors)
@@ -81,7 +82,7 @@ static void GetStreams(dmBuffer::HBuffer buffer,
     void* out_bytes = 0;
     uint32_t out_size = 0;
     dmBuffer::GetBytes(buffer, &out_bytes, &out_size);
-    printf("Buffer is %u bytes (%u mb)\n", out_size, out_size/(1024*1024));
+    //printf("Buffer is %u bytes (%u mb)\n", out_size, out_size/(1024*1024));
 
     uint32_t positions_count; uint32_t positions_components;
     uint32_t normals_count; uint32_t normals_components;
@@ -214,7 +215,7 @@ struct TimerScope
     uint64_t m_TimeStart;
 };
 
-static void GeneratePatchHeights(TerrainPatch* patch)
+static bool GeneratePatchHeights(TerrainPatch* patch)
 {
     TimerScope tscope(__FUNCTION__);
 
@@ -282,13 +283,14 @@ static void GeneratePatchHeights(TerrainPatch* patch)
         }
     }
 
-    patch->m_IsDataLoaded = 1;
+    //dmAtomicStore32(&patch->m_IsDataLoaded, 1);
 
     //printf("XZ: %d %d\n", patch->m_XZ[0], patch->m_XZ[1]);
     //printf("HEIGHT min/max: %f %f\n", height_min, height_max);
+    return true;
 }
 
-static void GenerateVertexData(TerrainPatch* patch)
+static bool GenerateVertexData(TerrainPatch* patch)
 {
     TimerScope tscope(__FUNCTION__);
 
@@ -362,24 +364,80 @@ static void GenerateVertexData(TerrainPatch* patch)
             #undef INCREMENT_STRIDE
         }
     }
+
+    return true;
 }
 
-
-static bool DoPatchLoad(TerrainPatch* patch)
+static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t num_steps)
 {
-    int patch_size = GetPatchSize(0);
+    dmBuffer::StreamDeclaration streams_decl[] = {
+        {VERTEX_STREAM_NAME_POSITION, dmBuffer::VALUE_TYPE_FLOAT32, 3},
+        {VERTEX_STREAM_NAME_NORMAL, dmBuffer::VALUE_TYPE_FLOAT32, 3},
+        {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_UINT8, 3},
+    };
+
+    // num triangles: num_quads * num_triangles per quad * num vertices per triangle
+    uint32_t element_count = (num_steps*num_steps) * 2 * 3;
+
+    dmBuffer::Result r = dmBuffer::Create(element_count, streams_decl, sizeof(streams_decl)/sizeof(dmBuffer::StreamDeclaration), buffer);
+    if (r != dmBuffer::RESULT_OK)
+    {
+        dmLogError("Failed to create buffer: %s (%d)", dmBuffer::GetResultString(r), r);
+        return;
+    }
+}
+
+static void PatchSetState(TerrainPatch* patch, PatchState state)
+{
+    if (state == PS_UNLOADED)
+    {
+        patch->m_XZ[0] = patch->m_XZ[1] = 100000;
+    }
+
+    dmAtomicStore32(&patch->m_DataState, 0);
+    dmAtomicStore32(&patch->m_LuaCallback, 0);
+    dmAtomicStore32(&patch->m_State, state);
+}
+
+static void PatchLoad(HTerrain terrain, TerrainPatch* patch, int x, int z)
+{
+    patch->m_XZ[0] = x;
+    patch->m_XZ[1] = z;
+    patch->m_Position = PatchToWorldCoord(patch->m_XZ, patch->m_Lod);
+
+    PatchSetState(patch, PS_LOADING);
+
+    printf("Loading %d, %d  %p\n", patch->m_XZ[0], patch->m_XZ[1], patch);
+}
+
+static void PatchUnload(HTerrain terrain, TerrainPatch* patch)
+{
+    PatchSetState(patch, PS_UNLOADING);
+    printf("Unloading %d, %d  %p\n", patch->m_XZ[0], patch->m_XZ[1], patch);
+}
+
+// Return false when not finished. Return true when finished with this state
+static bool DoPatchLoad(HTerrain terrain, TerrainPatch* patch)
+{
+    (void)terrain;
 
     if (patch->m_Generate)
     {
-        if (!patch->m_IsDataLoaded) {
-            GeneratePatchHeights(patch);
+        int data_state = dmAtomicGet32(&patch->m_DataState);
+        if (0 == data_state)
+        {
+            bool result = GeneratePatchHeights(patch);
+            if (result)
+                dmAtomicIncrement32(&patch->m_DataState);
             return false;
         }
-
-        GenerateVertexData(patch);
-
-        patch->m_IsLoading = 0;
-        patch->m_IsLoaded = 1;
+        else if (1 == data_state)
+        {
+            bool result = GenerateVertexData(patch);
+            if (result)
+                dmAtomicIncrement32(&patch->m_DataState);
+            return false;
+        }
         return true;
     }
 
@@ -393,64 +451,21 @@ static bool DoPatchLoad(TerrainPatch* patch)
     return true;
 }
 
-static void CreateBuffer(dmBuffer::HBuffer* buffer, uint32_t patch_size)
-{
-    dmBuffer::StreamDeclaration streams_decl[] = {
-        {VERTEX_STREAM_NAME_POSITION, dmBuffer::VALUE_TYPE_FLOAT32, 3},
-        {VERTEX_STREAM_NAME_NORMAL, dmBuffer::VALUE_TYPE_FLOAT32, 3},
-        {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_UINT8, 3},
-    };
-
-    // num triangles: num_quads * num_triangles per quad * num vertices per triangle
-    uint32_t element_count = (patch_size*patch_size) * 2 * 3;
-
-    dmBuffer::Result r = dmBuffer::Create(element_count, streams_decl, sizeof(streams_decl)/sizeof(dmBuffer::StreamDeclaration), buffer);
-    if (r != dmBuffer::RESULT_OK)
-    {
-        dmLogError("Failed to create buffer: %s (%d)", dmBuffer::GetResultString(r), r);
-        return;
-    }
-}
-
-static void PutWork(HTerrain terrain, TerrainWork item)
-{
-    DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
-    if (terrain->m_Work.Full())
-        terrain->m_Work.OffsetCapacity(9*2);
-    terrain->m_Work.Push(item);
-    dmConditionVariable::Signal(terrain->m_ThreadCondition);
-}
-
-void PatchLoad(HTerrain terrain, TerrainPatch* patch)
-{
-    TerrainWork item;
-    item.m_Type = TERRAIN_WORK_LOAD;
-    item.m_Patch = patch;
-    item.m_IsDone = 0;
-    item.m_Generate = patch->m_Generate;
-    patch->m_IsLoading = 1;
-    patch->m_IsLoaded = 0;
-    patch->m_Delete = 0;
-    PutWork(terrain, item);
-}
-
-
-void PatchUnload(HTerrain terrain, TerrainPatch* patch)
-{
-    TerrainWork item;
-    item.m_Type = TERRAIN_WORK_UNLOAD;
-    item.m_Patch = patch;
-    item.m_IsDone = 0;
-    item.m_Generate = patch->m_Generate;
-    PutWork(terrain, item);
-}
-
 static bool DoPatchUnload(HTerrain terrain, TerrainPatch* patch)
 {
-    patch->m_IsDataLoaded = 0;
-    patch->m_IsLoaded = 0;
-    patch->m_Delete = 0;
-    return true;
+    int data_state = dmAtomicGet32(&patch->m_DataState);
+    if (0 == data_state)
+    {
+        DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+
+        terrain->m_Callback(TERRAIN_PATCH_HIDE, patch);
+
+        dmAtomicIncrement32(&patch->m_DataState);
+        return false;
+    }
+
+    int callback_done = dmAtomicGet32(&patch->m_LuaCallback);
+    return callback_done != 0;
 }
 
 
@@ -459,23 +474,21 @@ static void PatchDelete(TerrainPatch* patch)
     delete[] patch->m_Heightmap;
 }
 
-// Coords in [-1,1] range (i.e. around the camera)
-static bool IsPatchOccupied(TerrainPatchLod* patch_lod, int x, int z)
-{
-    return patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)];
-}
-// Coords in [-1,1] range (i.e. around the camera)
-static void SetPatchOccupied(TerrainPatchLod* patch_lod, int x, int z, bool loaded)
-{
-    //printf("SetPatchOccupied %d %d: %d\n", x, z, (int)loaded);
-    patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)] = loaded;
-}
+// // Coords in [-1,1] range (i.e. around the camera)
+// static bool IsPatchOccupied(TerrainPatchLod* patch_lod, int x, int z)
+// {
+//     return patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)];
+// }
+// // Coords in [-1,1] range (i.e. around the camera)
+// static void SetPatchOccupied(TerrainPatchLod* patch_lod, int x, int z, bool loaded)
+// {
+//     //printf("SetPatchOccupied %d %d: %d\n", x, z, (int)loaded);
+//     patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)] = loaded;
+// }
 
 HTerrain Create(const InitParams& params)
 {
     assert(params.m_Callback != 0);
-
-//printf("HACK: params.m_BasePatchSize: %u\n", params.m_BasePatchSize);
 
     int base_size = params.m_BasePatchSize;
     for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
@@ -495,7 +508,8 @@ HTerrain Create(const InitParams& params)
 
     Vector3 camera_pos = (terrain->m_View.getCol(3) * -1).getXYZ();
 
-    int patch_size = GetPatchSize(0);
+    // Number of steps to divide
+    int num_divides = GetPatchSize(0);
 
     // Initialize patches
     for (int lod = 0, id = 0; lod < NUM_LOD_LEVELS; ++lod)
@@ -508,21 +522,19 @@ HTerrain Create(const InitParams& params)
         {
             for (int z = -1; z <= 1; ++z, ++i, ++id)
             {
-                SetPatchOccupied(patch_lod, x, z, false);
+                //SetPatchOccupied(patch_lod, x, z, false);
 
-                TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
-                patch->m_Id = id;
+                TerrainPatch* patch = &patch_lod->m_Patches[i];
+                memset(patch, 0, sizeof(*patch));
+
+                patch->m_Id = id; // debug only
                 patch->m_HeightSeed = terrain_seed; // duplicate, but makes it easier to access on threads
                 patch->m_Lod = lod;
-                patch->m_IsLoaded = 0;
-                patch->m_Delete = 0;
-                patch->m_IsLoading = 0;
-                patch->m_IsDataLoaded = 0;
-                patch->m_Heightmap = 0;
-
                 patch->m_Generate = 1; // pass in option for this in the init function
 
-                CreateBuffer(&patch->m_Buffer, patch_size);
+                CreateBuffer(&patch->m_Buffer, num_divides);
+
+                PatchSetState(patch, PS_UNLOADED);
 
                 // dmRng::Init(&patch->m_Rng, dmRng::RandU32(&terrain->m_Rng));
             }
@@ -532,9 +544,9 @@ HTerrain Create(const InitParams& params)
     terrain->m_LoaderContext = 0;
     //terrain->m_LoaderContext = RawFileLoader_Init("/Users/mawe/work/projects/users/mawe/defold-terrain/data/heightmap.r16");
 
-    terrain->m_ThreadActive = true;
-    terrain->m_Thread = dmThread::New(TerrainThread, 0x80000, terrain, "terrain");
+    dmAtomicStore32(&terrain->m_ThreadActive, 1);
     terrain->m_ThreadMutex = dmMutex::New();
+    terrain->m_Thread = dmThread::New(TerrainThread, 0x80000, terrain, "terrain");
     terrain->m_ThreadCondition = dmConditionVariable::New();
 
     return terrain;
@@ -547,7 +559,7 @@ void Destroy(HTerrain terrain)
         RawFileLoader_Exit(terrain->m_LoaderContext);
 
     // Exit the thread
-    terrain->m_ThreadActive = false;
+    dmAtomicStore32(&terrain->m_ThreadActive, 0);
 
     dmMutex::Lock(terrain->m_ThreadMutex);
     dmConditionVariable::Signal(terrain->m_ThreadCondition);
@@ -561,7 +573,7 @@ void Destroy(HTerrain terrain)
 
     for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
     {
-        for (int i = 0; i < 9; ++i)
+        for (int i = 0; i < NUM_PATCHES; ++i)
         {
             TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
             PatchDelete(patch);
@@ -571,87 +583,32 @@ void Destroy(HTerrain terrain)
     delete terrain;
 }
 
-static void FlushWorkQueue(HTerrain terrain, dmArray<TerrainWork>& commands)
-{
-    uint32_t size = commands.Size();
-    for (uint32_t i = 0; i < size; ++i)
-    {
-        TerrainWork& cmd = commands[i];
-        TerrainPatch* patch = cmd.m_Patch;
-
-        bool isloaded = patch->m_IsLoaded;
-
-        if (cmd.m_Type == TERRAIN_WORK_LOAD)
-        {
-            cmd.m_IsDone = DoPatchLoad(patch);
-            if (cmd.m_IsDone && patch->m_Delete)
-            {
-                patch->m_IsLoaded = 0; // don't trigger a callback
-                PatchUnload(terrain, patch);
-            }
-        }
-        else if (cmd.m_Type == TERRAIN_WORK_UNLOAD)
-        {
-            cmd.m_IsDone = DoPatchUnload(terrain, patch);
-        }
-
-        if (!cmd.m_IsDone)
-            continue;
-
-        // Change in state, do the callbacks
-        if (isloaded != patch->m_IsLoaded)
-        {
-            if (patch->m_IsLoaded)
-                terrain->m_Callback(TERRAIN_PATCH_SHOW, patch);
-            else
-                terrain->m_Callback(TERRAIN_PATCH_HIDE, patch);
-        }
-
-        commands.EraseSwap(i);
-        --i;
-        --size;
-    }
-}
-
 static void TerrainThread(void* ctx)
 {
     TerrainWorld* terrain = (TerrainWorld*)ctx;
-    while (terrain->m_ThreadActive)
+    while (dmAtomicGet32(&terrain->m_ThreadActive))
     {
         // Lock and sleep until signaled there is jobs queued up
-        DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
-        while(terrain->m_Work.Empty() && terrain->m_ThreadActive)
-        {
-            printf("Thread entering sleep...\n");
-            fflush(stdout);
-            dmConditionVariable::Wait(terrain->m_ThreadCondition, terrain->m_ThreadMutex);
-            printf("Thread waking up!\n");
-            fflush(stdout);
-        }
-        if (!terrain->m_ThreadActive)
-            break;
+        // DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+        // while(terrain->m_Work.Empty() && terrain->m_ThreadActive)
+        // {
+        //     printf("Thread entering sleep...\n");
+        //     fflush(stdout);
+        //     dmConditionVariable::Wait(terrain->m_ThreadCondition, terrain->m_ThreadMutex);
+        //     printf("Thread waking up!\n");
+        //     fflush(stdout);
+        // }
+        // if (!terrain->m_ThreadActive)
+        //     break;
 
-        FlushWorkQueue(terrain, terrain->m_Work);
+        DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+        UpdatePatches(terrain, terrain->m_CameraPos);
+
+        //FlushWorkQueue(terrain, terrain->m_Work);
     }
 
     printf("Thread exited!\n");
     fflush(stdout);
-}
-
-static inline bool IsPatchFree(TerrainPatch* patch)
-{
-    return !patch->m_IsLoading && !patch->m_IsLoaded;
-}
-
-static TerrainPatch* FindFreePatch(HTerrain terrain, int lod)
-{
-    for (int i = 0; i < 9; ++i)
-    {
-        TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
-        if (IsPatchFree(patch))
-            return patch;
-    }
-    return 0;
 }
 
 static inline int Sign(int value)
@@ -659,11 +616,231 @@ static inline int Sign(int value)
     return value > 0 ? 1 : -1;
 }
 
-// update camera position
+static int ToIndex(int x, int z)
+{
+    int ix = x + 1;  // -1→0, 0→1, 1→2
+    int iz = z + 1;  // -1→0, 0→1, 1→2
+    return ix + 3 * iz;  // Row-major: 0-2 (z=-1), 3-5 (z=0), 6-8 (z=1)
+}
+
+static void ToXZ(int idx, int *out_x, int *out_z)
+{
+    int ix = idx % 3;   // 0..2
+    int iz = idx / 3;   // 0..2
+
+    *out_x = ix - 1;    // 0..2 -> -1..1
+    *out_z = iz - 1;    // 0..2 -> -1..1
+}
+
+static int FindUnoccupied(const bool* occupied, int* out_x, int* out_z)
+{
+    for (int i = 0; i < NUM_PATCHES; ++i)
+    {
+        if (!occupied[i])
+        {
+            ToXZ(i, out_x, out_z);
+            return i;
+        }
+    }
+    return -1;
+}
+
 // mark patches as discarded
 // Allow empty patches to load
 static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
 {
+    // static int frame = 0;
+    // frame++;
+
+    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    {
+        TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
+
+        int camera_xz[2];
+        {
+            DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+
+            camera_xz[0] = patch_lod->m_CameraXZ[0];
+            camera_xz[1] = patch_lod->m_CameraXZ[1];
+        }
+
+// TODO: Early out if the lod camera position hasn't moved
+
+        // This let's us know if the patches directly surrounding the camera patch is occupied
+        // Note that it doesn't guarantuee that the patch is available for use.
+        bool occupied[NUM_PATCHES] = {false, false, false, false, false, false, false, false, false};
+        bool some_empty = false;
+
+        for (int i = 0; i < NUM_PATCHES; ++i)
+        {
+            TerrainPatch* patch = &patch_lod->m_Patches[i];
+
+            int diffx = patch->m_XZ[0] - camera_xz[0];
+            int diffz = patch->m_XZ[1] - camera_xz[1];
+            if (dmMath::Abs(diffx) <= 1 && dmMath::Abs(diffz) <= 1)
+            {
+                int idx = ToIndex(diffx, diffz);
+                occupied[idx] = true;
+            }
+            // else
+            // {
+            //     some_empty = true;
+            // }
+        }
+
+        // if (some_empty)
+        // {
+        //     printf("occupied: ");
+        //     for (int i = 0; i < NUM_PATCHES; ++i)
+        //     {
+        //         printf("%d ", occupied[i]);
+        //     }
+        //     printf(" (fr: %d)\n", frame);
+
+        //     DebugPrint(terrain);
+        // }
+
+        for (int i = 0; i < NUM_PATCHES; ++i)
+        {
+            TerrainPatch* patch = &patch_lod->m_Patches[i];
+
+            // Bounding box check
+
+            // find out if it's more than one step away from the camera position
+            int diffx = patch->m_XZ[0] - camera_xz[0];
+            int diffz = patch->m_XZ[1] - camera_xz[1];
+
+            // If the difference is positive, then the camera is moving in the positive direction
+            // and the next patch position should be before the camera in that same direction
+            int movex = dmMath::Abs(diffx) > 1 ? Sign(diffx) : 0;
+            int movez = dmMath::Abs(diffz) > 1 ? Sign(diffz) : 0;
+
+            // If the patch has moved away from the camera
+            if (movex || movez)
+            {
+                int state = dmAtomicGet32(&patch->m_State);
+
+                if (PS_UNLOADED == state) // It is free to load a new one
+                {
+                    // Time to load a new patch
+
+                    // Find an unoccupied slot next to the camera
+                    // TODO: Find an unoccupied slot in front of the camera first, as we want to load them first
+                    int x, z;
+                    int idx = FindUnoccupied(occupied, &x, &z);
+                    if (idx >= 0)
+                    {
+                        occupied[idx] = true;
+                        PatchLoad(terrain, patch, camera_xz[0] + x, camera_xz[1] + z);
+                    }
+                }
+                else if (PS_LOADED == state)
+                {
+                    PatchUnload(terrain, patch);
+                }
+            }
+
+            // update any loading/unloading state
+            int state = dmAtomicGet32(&patch->m_State);
+
+            if (PS_LOADING == state)
+            {
+                if (DoPatchLoad(terrain, patch))
+                {
+                    PatchSetState(patch, PS_LOADED);
+
+                    DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+                    terrain->m_Callback(TERRAIN_PATCH_SHOW, patch);
+                }
+            }
+            else if (PS_UNLOADING == state)
+            {
+                if (DoPatchUnload(terrain, patch))
+                {
+                    PatchSetState(patch, PS_UNLOADED);
+                }
+            }
+        }
+    }
+
+    // for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    // {
+    //     TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
+
+    //     // Since we want to prioritize the loading of the patch immediately in front of the camera
+    //     // we want to sort the patches.
+    //     // This index table allows us to iterate in a different order
+    //     int idx[8*9] = {
+    //         4, 5, 2, 8, 1, 7, 0, 3, 6,  // dir:  1, 0, 0  East
+    //         4, 2, 1, 5, 0, 8, 3, 7, 6,  // dir:  1, 0,-1  NorthEast
+    //         4, 1, 0, 2, 3, 5, 6, 7, 8,  // dir: 0, 0, -1  North
+    //         4, 0, 1, 3, 6, 2, 7, 5, 8,  // dir: -1, 0,-1  NorthWest
+    //         4, 3, 6, 0, 7, 1, 8, 5, 2,  // dir: -1, 0, 0  West
+    //         4, 6, 3, 7, 0, 8, 1, 5, 2,  // dir: -1, 0, 1  SouthWest
+    //         4, 7, 6, 8, 3, 5, 0, 1, 2,  // dir: 0, 0,  1  South
+    //         4, 8, 7, 5, 6, 2, 3, 1, 0,  // dir:  1, 0, 1  SouthEast
+    //     };
+
+    //     const char* octantnames[8] = {
+    //         "East",
+    //         "NorthEast",
+    //         "North",
+    //         "NorthWest",
+    //         "West",
+    //         "SouthWest",
+    //         "South",
+    //         "SouthEast",
+    //     };
+
+    //     // figure out the quadrant that the camera direction is pointing at
+    //     float camdirx = terrain->m_CameraDir.getX();
+    //     float camdirz = -terrain->m_CameraDir.getZ(); // we want negative Z to be "north"
+    //     float a = atan2f(camdirz, camdirx);
+    //     int octant = int( 8 * a / (2*M_PI) + 8.5f ) % 8;
+
+    //     //printf("octant: %s\n", octantnames[octant]);
+
+    //     for (int i = 0; i < NUM_PATCHES; ++i)
+    //     {
+    //         int index = idx[octant * NUM_PATCHES + i];
+    //         int x = index % 3 - 1;
+    //         int z = index / 3 - 1;
+    //         {
+    //             if (!IsPatchOccupied(patch_lod, x, z))
+    //             {
+    //                 TerrainPatch* patch = AllocateFreePatch(terrain, lod);
+    //                 if (!patch)
+    //                     continue;
+
+    //                 // move this patch
+    //                 patch->m_XZ[0] = patch_lod->m_CameraXZ[0] + x;
+    //                 patch->m_XZ[1] = patch_lod->m_CameraXZ[1] + z;
+
+    //                 patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
+
+    //                 // printf("Loading patch: %d %d (%d %d)    pos: %.3f, %.3f  camera: %d %d\n",
+    //                 //     patch->m_XZ[0], patch->m_XZ[1], x, z, patch->m_Position.getX(), patch->m_Position.getZ(),
+    //                 //     patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
+
+    //                 PatchLoad(terrain, patch);
+
+    //                 SetPatchOccupied(patch_lod, x, z, true);
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+static float round_to_step(float x, float step)
+{
+    float scaled = x / step;
+    float rounded = (floorf(scaled + 0.5f)) * step;
+    return rounded;
+}
+
+static bool UpdateCameraPos(HTerrain terrain, dmVMath::Vector3& camera_pos)
+{
+    bool lods_need_update = false;
     for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
     {
         TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
@@ -674,7 +851,8 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
         int camera_diffx = camera_xz[0] - patch_lod->m_CameraXZ[0];
         int camera_diffz = camera_xz[1] - patch_lod->m_CameraXZ[1];
 
-        bool camera_moved = camera_diffx!=0 || camera_diffz!= 0;
+        bool camera_moved = (camera_diffx !=0) || (camera_diffz != 0);
+        lods_need_update |= camera_moved;
 
         // if (camera_moved)
         // {
@@ -683,152 +861,68 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
         //         camera_diffx, camera_diffz, Sign(camera_diffx), Sign(camera_diffz),
         //         camera_pos.getX(), camera_pos.getY(), camera_pos.getZ());
         // }
-
-        patch_lod->m_CameraXZ[0] = camera_xz[0];
-        patch_lod->m_CameraXZ[1] = camera_xz[1];
-
-        // Mark the new slots as missing
-        if (camera_diffx != 0)
+        if (camera_moved)
         {
-            SetPatchOccupied(patch_lod, Sign(camera_diffx), -1, false);
-            SetPatchOccupied(patch_lod, Sign(camera_diffx),  0, false);
-            SetPatchOccupied(patch_lod, Sign(camera_diffx),  1, false);
-        }
-        if (camera_diffz != 0)
-        {
-            SetPatchOccupied(patch_lod, -1, Sign(camera_diffz), false);
-            SetPatchOccupied(patch_lod,  0, Sign(camera_diffz), false);
-            SetPatchOccupied(patch_lod,  1, Sign(camera_diffz), false);
+            printf("Camera update: %d, %d\n", patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
         }
 
-        // if (camera_diffx || camera_diffz)
-        // {
-        //     printf("     x-1  x+0  x+1\n");
-        //     printf("z-1  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1, -1), IsPatchOccupied(patch_lod, 0, -1), IsPatchOccupied(patch_lod, 1, -1));
-        //     printf("z+0  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1,  0), IsPatchOccupied(patch_lod, 0,  0), IsPatchOccupied(patch_lod, 1,  0));
-        //     printf("z+1  %2d  %2d  %2d\n", IsPatchOccupied(patch_lod, -1, +1), IsPatchOccupied(patch_lod, 0, +1), IsPatchOccupied(patch_lod, 1, +1));
-        // }
-
-        for (int i = 0; i < 9; ++i)
         {
-            TerrainPatch* patch = &patch_lod->m_Patches[i];
-
-            // Bounding box check
-
-            // find out if it's more than one step away from the camera position
-            int diffx = patch->m_XZ[0] - camera_xz[0];
-            int diffz = patch->m_XZ[1] - camera_xz[1];
-
-            // the the difference is positive, then the camera is moving in the positive direction
-            // and the next patch position should be before the camera in that same direction
-            int movex = dmMath::Abs(diffx) > 1 ? Sign(diffx) : 0;
-            int movez = dmMath::Abs(diffz) > 1 ? Sign(diffz) : 0;
-
-            if (movex || movez)
-            {
-                if (patch->m_IsLoading)
-                {
-                    patch->m_Delete = 1; // might possibly do an early out of the patch loader
-                    continue;
-                }
-                else if (patch->m_IsLoaded)
-                {
-                    PatchUnload(terrain, patch);
-                    continue;
-                }
-            }
+            DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+            patch_lod->m_CameraXZ[0] = camera_xz[0];
+            patch_lod->m_CameraXZ[1] = camera_xz[1];
         }
     }
-
-    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
-    {
-        TerrainPatchLod* patch_lod = &terrain->m_Terrain[lod];
-
-
-        // Since we want to prioritize the loading of the patch immediately in front of the camera
-        // we want to sort the patches. However, since
-
-        int idx[8*9] = {
-            4, 5, 2, 8, 1, 7, 0, 3, 6,  // dir:  1, 0, 0  East
-            4, 2, 1, 5, 0, 8, 3, 7, 6,  // dir:  1, 0,-1  NorthEast
-            4, 1, 0, 2, 3, 5, 6, 7, 8,  // dir: 0, 0, -1  North
-            4, 0, 1, 3, 6, 2, 7, 5, 8,  // dir: -1, 0,-1  NorthWest
-            4, 3, 6, 0, 7, 1, 8, 5, 2,  // dir: -1, 0, 0  West
-            4, 6, 3, 7, 0, 8, 1, 5, 2,  // dir: -1, 0, 1  SouthWest
-            4, 7, 6, 8, 3, 5, 0, 1, 2,  // dir: 0, 0,  1  South
-            4, 8, 7, 5, 6, 2, 3, 1, 0,  // dir:  1, 0, 1  SouthEast
-        };
-
-        const char* octantnames[8] = {
-            "East",
-            "NorthEast",
-            "North",
-            "NorthWest",
-            "West",
-            "SouthWest",
-            "South",
-            "SouthEast",
-        };
-
-        // figure out the quadrant that the camera direction is pointing at
-        float camdirx = terrain->m_CameraDir.getX();
-        float camdirz = -terrain->m_CameraDir.getZ(); // we want negative Z to be "north"
-        float a = atan2f(camdirz, camdirx);
-        int octant = int( 8 * a / (2*M_PI) + 8.5f ) % 8;
-
-        //printf("octant: %s\n", octantnames[octant]);
-
-        for (int i = 0; i < 9; ++i)
-        //for (int z = -1; z <= 1; ++z)
-        {
-            int index = idx[octant*9 + i];
-            int x = index % 3 - 1;
-            int z = index / 3 - 1;
-            //for (int x = -1; x <= 1; ++x)
-            {
-                if (!IsPatchOccupied(patch_lod, x, z))
-                {
-                    TerrainPatch* patch = FindFreePatch(terrain, lod);
-                    if (patch)
-                    {
-                        // move this patch
-                        int newx = patch_lod->m_CameraXZ[0] + x;
-                        int newz = patch_lod->m_CameraXZ[1] + z;
-
-                        patch->m_XZ[0] = newx;
-                        patch->m_XZ[1] = newz;
-
-                        patch->m_Position = PatchToWorldCoord(patch->m_XZ, lod);
-
-                        // printf("Loading patch: %d %d (%d %d)    pos: %.3f, %.3f  camera: %d %d\n",
-                        //     patch->m_XZ[0], patch->m_XZ[1], x, z, patch->m_Position.getX(), patch->m_Position.getZ(),
-                        //     patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
-
-                        PatchLoad(terrain, patch);
-
-                        SetPatchOccupied(patch_lod, x, z, true);
-                    }
-                }
-            }
-        }
-    }
+    return lods_need_update;
 }
-
 
 void Update(HTerrain terrain, const UpdateParams& params)
 {
     terrain->m_View = params.m_View;
 
     Matrix4 invView = inverse(params.m_View);
-    terrain->m_CameraPos = invView.getCol(3).getXYZ();
     terrain->m_CameraDir = -invView.getCol(2).getXYZ();
 
-    UpdatePatches(terrain, terrain->m_CameraPos);
+// TODO: This is just a small hack to make the loading/unloading a little bit more stable,
+// when camera is passing boundaries. Should replace with more logic when exiting the current camera's patch.
+    dmVMath::Vector3 pos = invView.getCol(3).getXYZ();
+    pos = dmVMath::Vector3(round_to_step(pos.getX(), 0.05f),
+                           round_to_step(pos.getY(), 0.05f),
+                           round_to_step(pos.getZ(), 0.05f));
+
+    if (UpdateCameraPos(terrain, pos))
+    {
+        if (terrain->m_Thread)
+            dmConditionVariable::Signal(terrain->m_ThreadCondition); // wake up thread if it wasn't already working
+    }
 
     // For single threaded systems
     if (!terrain->m_Thread)
-        FlushWorkQueue(terrain, terrain->m_Work);
+    {
+        UpdatePatches(terrain, terrain->m_CameraPos);
+    }
 }
 
+
+void DebugPrint(HTerrain terrain)
+{
+    DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+
+    for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
+    {
+        TerrainPatchLod* patchlod = &terrain->m_Terrain[lod];
+        printf("LOD %d: cam x/z: %d %d\n", lod, patchlod->m_CameraXZ[0], patchlod->m_CameraXZ[1]);
+
+        for (int i = 0; i < NUM_PATCHES; ++i)
+        {
+            TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
+            printf("  p %d: x/z: %d, %d  s: %d  ds: %d lua: %d  p: %p\n", i, patch->m_XZ[0], patch->m_XZ[1],
+                    dmAtomicGet32(&patch->m_State),
+                    dmAtomicGet32(&patch->m_DataState),
+                    dmAtomicGet32(&patch->m_LuaCallback),
+                    patch);
+        }
+    }
+
+}
 
 } // namespace

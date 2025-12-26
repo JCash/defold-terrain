@@ -42,6 +42,10 @@ key_trigger {
   input: KEY_1
   action: "TERRAIN_RECALC"
 }
+key_trigger {
+  input: KEY_2
+  action: "TERRAIN_DEBUG"
+}
 mouse_trigger {
   input: MOUSE_BUTTON_1
   action: "MOUSE_BUTTON_1"

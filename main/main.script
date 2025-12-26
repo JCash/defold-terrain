@@ -1,7 +1,40 @@
 local terrain_helper = require("defold-terrain/scripts/helper")
 
+local function print_sorted_by_z(t)
+	local items = {}
+	for _, v in pairs(t) do
+		items[#items + 1] = v
+	end
+
+	table.sort(items, function(a, b)
+		if a.z == b.z then
+			return a.x < b.x
+		end
+		return a.z < b.z
+	end)
+
+	local current_z = nil
+	local line = {}
+
+	for _, v in ipairs(items) do
+		if current_z == nil then
+			current_z = v.z
+		elseif v.z ~= current_z then
+			print(table.concat(line, " "))
+			line = {}
+			current_z = v.z
+		end
+
+		line[#line + 1] = string.format("(%d,%d)", v.x, v.z)
+	end
+
+	if #line > 0 then
+		print(table.concat(line, " "))
+	end
+end
 
 local function terrain_listener(self, event, data)
+	local debug = false
 	if event == terrain.TERRAIN_PATCH_SHOW then
 		if self.one then
 			return
@@ -14,7 +47,7 @@ local function terrain_listener(self, event, data)
 		--mesh_url = msg.url("terrain#mesh_lod0_0")
 
 		--pprint("callback", mesh_url, event, data)
-		print("SHOW", data.id, data.x, data.z, data.position)
+		print("SHOW", "id", data.id, "x/z", data.x, data.z, "pos", data.position)
 
 		-- any time spent here is for uploading the vertex buffer
 		go.set_position(data.position, mesh_id)
@@ -23,10 +56,9 @@ local function terrain_listener(self, event, data)
 
 		data.mesh_id = mesh_id
 		self.patches[0][data.id] = data
-		-- for k, _ in pairs(self.patches[0]) do
-		-- 	print("MAWE", "key", k)
-		-- end
-		--pprint("PATCHES", self.patches[0])
+
+		debug = true
+
 	elseif event == terrain.TERRAIN_PATCH_HIDE then
 		print("HIDE", data.id, "pos", data.x, data.z)
 		--pprint("PATCHES", data.id, self.patches[0])
@@ -37,6 +69,27 @@ local function terrain_listener(self, event, data)
 		--print("Readding mesh_id", patch_data.mesh_id)
 		table.insert(self.free_meshes, patch_data.mesh_id)
 		self.patches[0][data.id] = nil
+
+		debug = true
+	end
+
+	if debug then
+		local min_x = 1000
+		local min_z = 1000
+		local lpatches = {}
+		for k, data in pairs(self.patches[0]) do
+			--print("patch", "key", data.x, data.z)
+			table.insert(lpatches, {x=data.x, z=data.z})
+		end
+
+		print("PATCHES:")
+		print_sorted_by_z(lpatches)
+		--pprint("patches", lpatches)
+
+		-- for k, data in pairs(self.patches[0]) do
+		-- 	print("patch", "key", data.x, data.z)
+		-- end
+		-- --pprint("PATCHES", self.patches[0])
 	end
 end
 
@@ -98,8 +151,6 @@ function init(self)
 		local buf = resource.create_buffer(resource_name, { buffer = buffer_handle })
 		go.set(mesh_url, "vertices", buf)
 
-		print("MAWE", i, ":", mesh_url, resource_name, buf)
-		
 		-- todo: the dims should be set after grabbing it from the pool (i.e. not here)
 		-- so that it can be used with any lod
 		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
@@ -122,7 +173,7 @@ end
 local function reload_terrain(self)
 	for k, v in pairs(self.patches[0]) do
 		print("reload", k, v)
-		terrain.reload_patch(v.ptr)
+		terrain.reload_patch(v.id)
 	end
 end
 
@@ -158,5 +209,7 @@ function on_input(self, action_id, action)
 		msg.post("@render:", "gfx_dbg_toggle", {'wireframe'})
 	elseif action_id == hash("TERRAIN_RECALC") and action.pressed then
 		reload_terrain(self)
+	elseif action_id == hash("TERRAIN_DEBUG") and action.pressed then
+		terrain.debug_print()
 	end
 end

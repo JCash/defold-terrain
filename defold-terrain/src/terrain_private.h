@@ -1,6 +1,7 @@
 #pragma once
 #include <dmsdk/sdk.h>
 #include <dmsdk/dlib/align.h>
+#include <dmsdk/dlib/atomic.h>
 #include <dmsdk/dlib/thread.h>
 #include <dmsdk/dlib/condition_variable.h>
 #include "terrain.h"
@@ -8,30 +9,15 @@
 
 namespace dmTerrain {
 
+    const uint32_t NUM_LOD_LEVELS = 1; // Todo: make this configurable
+    const uint32_t NUM_PATCHES = 9;
+    const uint32_t NUM_TOTAL_PATCHES = NUM_LOD_LEVELS * NUM_PATCHES;
+
     struct DM_ALIGNED(16) TerrainPatchLod
     {
-        TerrainPatch m_Patches[9];
-
-        int m_CameraXZ[2]; // The camera pos in patch space
-        bool m_PatchesOccupied[9];
+        TerrainPatch    m_Patches[NUM_PATCHES];
+        int             m_CameraXZ[2]; // The camera pos in patch space
     };
-
-    enum TerrainWorkType
-    {
-        TERRAIN_WORK_LOAD,
-        TERRAIN_WORK_UNLOAD,
-        TERRAIN_WORK_RELOAD,
-    };
-
-    struct TerrainWork
-    {
-        TerrainWorkType m_Type;
-        TerrainPatch*   m_Patch;
-        uint32_t        m_IsDone:1;
-        uint32_t        m_Generate:1; // 1 = generate via noise
-    };
-
-    const uint32_t NUM_LOD_LEVELS = 1; // Todo: make this configurable
 
     struct DM_ALIGNED(16) TerrainWorld
     {
@@ -44,16 +30,14 @@ namespace dmTerrain {
 
         dmRng::Rng m_Rng;
 
-        dmArray<TerrainWork> m_Work;
-
-        uint8_t m_ThreadActive;
-        dmThread::Thread m_Thread;
-        dmMutex::HMutex m_ThreadMutex;
+        int32_atomic_t      m_ThreadActive;
+        dmThread::Thread    m_Thread;
+        dmMutex::HMutex     m_ThreadMutex;
         dmConditionVariable::HConditionVariable m_ThreadCondition;
 
         void* m_LoaderContext;
 
-        void (*m_Callback)(TerrainEvents event, const TerrainPatch* patch);
+        void (*m_Callback)(TerrainEvents event, TerrainPatch* patch);
     };
 
     typedef TerrainWorld* HTerrain;
