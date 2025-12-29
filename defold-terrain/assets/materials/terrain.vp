@@ -13,7 +13,7 @@ uniform mediump mat4 mtx_view;
 uniform mediump mat4 mtx_proj;
 uniform mediump mat4 mtx_normal;
 uniform mediump vec4 light;
-uniform mediump vec4 dims; // patch size, 1.0 / patch size, unused, unused
+//uniform mediump vec4 dims; // patch size, 1.0 / patch size, unused, unused
 
 varying highp vec4 var_position;
 varying mediump vec3 var_normal;
@@ -26,7 +26,11 @@ void main()
     vec4 p = mtx_worldview * vec4(position.xyz, 1.0);
     var_light = mtx_view * vec4(light.xyz, 1.0);
     var_position = p;
-    var_texcoord = position.xz * dims.y;
+
+// TODO: Set dims in code!
+    //var_texcoord = position.xz * dims.y;
+    var_texcoord = position.xz * (1.0/512.0);
+
     var_color = color;
     var_normal = normalize((mtx_normal * vec4(normal, 0.0)).xyz);
     var_normal = normal.xyz;
