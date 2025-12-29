@@ -168,6 +168,9 @@ function init(self)
 -- 		table.insert(self.free_meshes, v)
 -- 	end
 -- 
+
+	go.set_position(vmath.vector3(64, 128, -256), self.camera)
+	self.update = true
 end
 
 local function reload_terrain(self)
@@ -196,7 +199,9 @@ function update(self, dt)
 		local dir = vmath.vector3(-inv.m02, -inv.m12, -inv.m22)
 		msg.post("main#gui", "set_position", {position = pos, direction = dir})
 
-		terrain.update(dt, terrain_data)
+		if self.update then
+			terrain.update(dt, terrain_data)
+		end
 	end
 end
 
@@ -211,5 +216,6 @@ function on_input(self, action_id, action)
 		reload_terrain(self)
 	elseif action_id == hash("TERRAIN_DEBUG") and action.pressed then
 		terrain.debug_print()
+		self.update = not self.update
 	end
 end
