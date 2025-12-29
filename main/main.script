@@ -1,3 +1,5 @@
+go.property("patchfactory", msg.url("terrain#patchfactory"))
+
 local terrain_helper = require("defold-terrain/scripts/helper")
 
 local function print_sorted_by_z(t)
@@ -35,39 +37,16 @@ end
 
 local function terrain_listener(self, event, data)
 	local debug = false
+
 	if event == terrain.TERRAIN_PATCH_SHOW then
-		if self.one then
-			return
-		end
 
-		--self.one = true
-
-		local mesh_id = table.remove(self.free_meshes)		
-		local mesh_url = msg.url(nil, mesh_id, "mesh")
-		--mesh_url = msg.url("terrain#mesh_lod0_0")
-
-		--pprint("callback", mesh_url, event, data)
 		print("SHOW", "id", data.id, "x/z", data.x, data.z, "pos", data.position)
-
-		-- any time spent here is for uploading the vertex buffer
-		go.set_position(data.position, mesh_id)
-		local res = go.get(mesh_url, "vertices")
-		resource.set_buffer(res, data.buffer)
-
-		data.mesh_id = mesh_id
 		self.patches[0][data.id] = data
 
 		debug = true
 
 	elseif event == terrain.TERRAIN_PATCH_HIDE then
 		print("HIDE", data.id, "pos", data.x, data.z)
-		--pprint("PATCHES", data.id, self.patches[0])
-		-- for k, _ in pairs(self.patches[0]) do
-		-- 	print("MAWE", "key", k)
-		-- end
-		local patch_data = self.patches[0][data.id]
-		--print("Readding mesh_id", patch_data.mesh_id)
-		table.insert(self.free_meshes, patch_data.mesh_id)
 		self.patches[0][data.id] = nil
 
 		debug = true
@@ -82,9 +61,8 @@ local function terrain_listener(self, event, data)
 			table.insert(lpatches, {x=data.x, z=data.z})
 		end
 
-		print("PATCHES:")
-		print_sorted_by_z(lpatches)
-		--pprint("patches", lpatches)
+		-- print("PATCHES:")
+		-- print_sorted_by_z(lpatches)
 
 		-- for k, data in pairs(self.patches[0]) do
 		-- 	print("patch", "key", data.x, data.z)
@@ -97,8 +75,6 @@ function init(self)
 	msg.post(".", "acquire_input_focus")
 	self.profiler_enabled = false
 
-	self.one = false
-
 	self.camera = msg.url("/camera#camera")
 	self.camera_go = msg.url("/camera")
 
@@ -106,7 +82,7 @@ function init(self)
 		self.patch_size = 512 --lod 0
 		local view = go.get(self.camera, "view")
 		local proj = go.get(self.camera, "projection")
-		local terrain_data = { view = view, proj = proj }
+		local terrain_data = { view = view, proj = proj, factory = self.patchfactory }
 		terrain.init(terrain_listener, terrain_data)
 	else
 		print("RUNNING VANILLA ENGINE!!!")
@@ -120,56 +96,8 @@ function init(self)
 	-- pool of free patches (used for all lods)
 	self.free_meshes = {}
 
-	-- we need 9 patches for each lod
-	for i=1,9 do
-		local go_id = factory.create("terrain#patchfactory")
-		local mesh_url = msg.url(nil, go_id, "mesh")
-
-		-- each patch spawns with a empty buffer resource, so let's create a new one
-		-- and assign it
-		-- todo: Update the buffer api to allow for cloning a buffer (to get the correct format)
-		local buffer_handle = buffer.create(1, {
-				{
-					name  = hash("position"),
-					type  = buffer.VALUE_TYPE_FLOAT32,
-					count = 3
-				},
-				{
-					name = hash("normal"),
-					type  = buffer.VALUE_TYPE_FLOAT32,
-					count = 3
-				},
-				{
-					name = hash("color"),
-					type  = buffer.VALUE_TYPE_UINT8,
-					count = 3
-				}
-			})
-		
-		local resource_name = "/patchbuffer_" .. i .. ".bufferc"
-		--local resource_hash = hash("patchbuffer_" .. i .. ".bufferc")
-		local buf = resource.create_buffer(resource_name, { buffer = buffer_handle })
-		go.set(mesh_url, "vertices", buf)
-
-		-- todo: the dims should be set after grabbing it from the pool (i.e. not here)
-		-- so that it can be used with any lod
-		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
-		go.set(mesh_url, "dims", dims)
-		
-		table.insert(self.free_meshes, go_id)
-	end
-
--- 	local patches = collectionfactory.create("terrain#collectionfactory")
--- 	
--- 	for _, v in pairs(patches) do
--- 		local mesh_url = msg.url(nil, v, "mesh")
--- 		local dims = vmath.vector4(self.patch_size, 1.0/self.patch_size, 0, 0)
--- 		go.set(mesh_url, "dims", dims)
--- 		table.insert(self.free_meshes, v)
--- 	end
--- 
-
 	go.set_position(vmath.vector3(64, 128, -256), self.camera)
+
 	self.update = true
 end
 
