@@ -1,11 +1,18 @@
 #include <assert.h>
 #include <dmsdk/dlib/math.h>
 #include <dmsdk/dlib/time.h>
-#include "terrain_private.h"
+#include <dmsdk/gameobject/gameobject_props.h>
+
+#include "buffer.h"
 #include "loader_file.h"
-#include "terrain.h"
 #include "noise.h"
 #include "rng.h"
+#include "terrain.h"
+#include "terrain_private.h"
+
+#if !defined(DM_RESOURCE_NAME_PREFIX)
+    #define DM_RESOURCE_NAME_PREFIX "/defold-terrain"
+#endif
 
 namespace dmTerrain
 {
@@ -173,28 +180,24 @@ static inline int Clampi(int a, int b, int v)
 }
 
 // Coord range (-1,-1), (patch_size+1, patch_size+1)
-static float GetHeight(TerrainPatch* patch, int x, int z)
+static float GetHeight(uint16_t* heightmap, uint32_t patch_size, int x, int z)
 {
-    x++;
-    z++;
-    uint32_t patch_size = GetPatchSize(patch->m_Lod);
-    // x = Clampi(0, patch_size+1, x);
-    // z = Clampi(0, patch_size+1, z);
+    uint32_t size = patch_size + 3; // patch_size + 1 == num_vertices per side. +2 for adding two rows for calculating normals
+    uint32_t idx = (z+1) * size + (x+1);
 
-    uint32_t idx = z * (patch_size+3) + x;
-    uint32_t uh = patch->m_Heightmap[idx];
+    uint32_t uh = heightmap[idx];
     float h = uh * UNSIGNED_TO_HEIGHT_FACTOR;
 
 //printf("get height %u %u:  %f  uh: %u   idx: %u\n", x, z, h, uh, idx);
     return h;
 }
 
-static Vector3 GetNormal(TerrainPatch* patch, int x, int z)
+static Vector3 GetNormal(uint16_t* heightmap, uint32_t patch_size, int x, int z)
 {
-    float x_a = GetHeight(patch, x-1, z);
-    float x_b = GetHeight(patch, x+1, z);
-    float z_a = GetHeight(patch, x, z-1);
-    float z_b = GetHeight(patch, x, z+1);
+    float x_a = GetHeight(heightmap, patch_size, x-1, z);
+    float x_b = GetHeight(heightmap, patch_size, x+1, z);
+    float z_a = GetHeight(heightmap, patch_size, x, z-1);
+    float z_b = GetHeight(heightmap, patch_size, x, z+1);
 
     float xz_scale = 1.0f;
     Vector3 n(x_b - x_a, 2 * xz_scale, z_b - z_a);
@@ -223,22 +226,25 @@ static bool GeneratePatchHeights(TerrainPatch* patch)
     float wx = patch->m_XZ[0];
     float wz = patch->m_XZ[1];
 
+
     int patch_size = GetPatchSize(0);
 
-    int num_verts = patch_size+1;
+    int num_verts = patch_size+1; // Number of vertices for one side. 1 step = 2 vertices, 2 steps = 3 vertices ...
     float oo_patch_size_f = 1.0f / patch_size;
 
     int size = num_verts+2; // we have an extra border in order to get correct normal values
     if (patch->m_Heightmap == 0)
         patch->m_Heightmap = new uint16_t[size * size];
 
-    patch->m_HeightMin = 65535;
-    patch->m_HeightMax = 0;
+    uint16_t patch_height_min = 65535;
+    uint16_t patch_height_max = 0;
 
+    bool debug = true;
 
-    for (int x = -1; x < num_verts+1; ++x)
+    //for (int x = -1; x < num_verts+1; ++x)
+    for (int z = -1; z < num_verts+1; ++z)
     {
-        for (int z = -1; z < num_verts+1; ++z)
+        for (int x = -1; x < num_verts+1; ++x)
         {
             float u = x * oo_patch_size_f;
             float v = z * oo_patch_size_f;
@@ -275,15 +281,16 @@ static bool GeneratePatchHeights(TerrainPatch* patch)
             //if (z == -1)
             //    printf("height: %f  uh: %u   idx: %u  u/v: %f %f\n", h, uh, z * size + x, u, v);
 
-            if (uh < patch->m_HeightMin)
-                patch->m_HeightMin = uh;
+            if (uh < patch_height_min)
+                patch_height_min = uh;
 
-            if (uh > patch->m_HeightMax)
-                patch->m_HeightMax = uh;
+            if (uh > patch_height_max)
+                patch_height_max = uh;
         }
     }
 
-    //dmAtomicStore32(&patch->m_IsDataLoaded, 1);
+    patch->m_HeightMin = patch_height_max;
+    patch->m_HeightMax = patch_height_min;
 
     //printf("XZ: %d %d\n", patch->m_XZ[0], patch->m_XZ[1]);
     //printf("HEIGHT min/max: %f %f\n", height_min, height_max);
@@ -297,13 +304,13 @@ static bool GenerateVertexData(TerrainPatch* patch)
     float* positions; uint32_t positions_stride;
     float* normals; uint32_t normals_stride;
     uint8_t* colors; uint32_t colors_stride;
+
     GetStreams(patch->m_Buffer,
                 positions, positions_stride,
                 normals, normals_stride,
                 colors, colors_stride);
 
-
-    uint32_t patch_size = GetPatchSize(0);
+    uint32_t patch_size = GetPatchSize(patch->m_Lod);
     float oo_patch_size_f = 1.0f / patch_size;
     uint32_t step_size = 1;
     float wx = patch->m_XZ[0];
@@ -313,6 +320,8 @@ static bool GenerateVertexData(TerrainPatch* patch)
     //printf("XZ: %d %d  patch_size: %u\n", patch->m_XZ[0], patch->m_XZ[1], patch_size);
 
     uint32_t world_size = 65536;
+
+    uint16_t* heightmap = patch->m_Heightmap;
 
     float scale = 1;
     for (uint32_t x = 0; x <= patch_size-1; ++x)
@@ -331,20 +340,20 @@ static bool GenerateVertexData(TerrainPatch* patch)
 
             //printf("uv: %f %f  %f %f\n", u0, v0, u1, v1);
 
-            float h0 = GetHeight(patch, x,     z);
-            float h1 = GetHeight(patch, x,     z + 1);
-            float h2 = GetHeight(patch, x + 1, z + 1);
-            float h3 = GetHeight(patch, x + 1, z);
+            float h0 = GetHeight(heightmap, patch_size, x,     z);
+            float h1 = GetHeight(heightmap, patch_size, x,     z + 1);
+            float h2 = GetHeight(heightmap, patch_size, x + 1, z + 1);
+            float h3 = GetHeight(heightmap, patch_size, x + 1, z);
 
             Vector3 p0 = Vector3(x0, h0, z0) * scale;
             Vector3 p1 = Vector3(x0, h1, z1) * scale;
             Vector3 p2 = Vector3(x1, h2, z1) * scale;
             Vector3 p3 = Vector3(x1, h3, z0) * scale;
 
-            Vector3 n0 = GetNormal(patch, x,     z);
-            Vector3 n1 = GetNormal(patch, x,     z + 1);
-            Vector3 n2 = GetNormal(patch, x + 1, z + 1);
-            Vector3 n3 = GetNormal(patch, x + 1, z);
+            Vector3 n0 = GetNormal(heightmap, patch_size, x,     z);
+            Vector3 n1 = GetNormal(heightmap, patch_size, x,     z + 1);
+            Vector3 n2 = GetNormal(heightmap, patch_size, x + 1, z + 1);
+            Vector3 n3 = GetNormal(heightmap, patch_size, x + 1, z);
 
             uint8_t col0[3] = {255,255,255};
             uint8_t col1[3] = {255,255,255};
@@ -364,6 +373,8 @@ static bool GenerateVertexData(TerrainPatch* patch)
             #undef INCREMENT_STRIDE
         }
     }
+
+    dmBuffer::UpdateContentVersion(patch->m_Buffer);
 
     return true;
 }
@@ -438,6 +449,30 @@ static bool DoPatchLoad(HTerrain terrain, TerrainPatch* patch)
                 dmAtomicIncrement32(&patch->m_DataState);
             return false;
         }
+        else if (2 == data_state)
+        {
+            FlushCommand cmd;
+            cmd.m_Instance          = patch->m_Instance;
+            cmd.m_Position          = dmVMath::Point3(patch->m_Position);
+            cmd.m_BufferPathHash    = patch->m_PathHash;
+            cmd.m_DataState         = &patch->m_DataState;
+
+            {
+                DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+                if (terrain->m_FlushCommands.Full())
+                    terrain->m_FlushCommands.OffsetCapacity(NUM_PATCHES);
+                terrain->m_FlushCommands.Push(cmd);
+            }
+
+            dmAtomicIncrement32(&patch->m_DataState);
+            return false;
+        }
+        else if (3 == data_state)
+        {
+            // waiting for synching on main thread
+            return false;
+        }
+
         return true;
     }
 
@@ -469,22 +504,35 @@ static bool DoPatchUnload(HTerrain terrain, TerrainPatch* patch)
 }
 
 
-static void PatchDelete(TerrainPatch* patch)
+static void PatchDelete(HTerrain terrain, TerrainPatch* patch)
 {
     delete[] patch->m_Heightmap;
+    if (patch->m_Instance)
+        dmGameObject::Delete(terrain->m_Collection, patch->m_Instance, true);
+    if (patch->m_Resource)
+        ResourceRelease(terrain->m_Factory, patch->m_Resource);
 }
 
-// // Coords in [-1,1] range (i.e. around the camera)
-// static bool IsPatchOccupied(TerrainPatchLod* patch_lod, int x, int z)
-// {
-//     return patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)];
-// }
-// // Coords in [-1,1] range (i.e. around the camera)
-// static void SetPatchOccupied(TerrainPatchLod* patch_lod, int x, int z, bool loaded)
-// {
-//     //printf("SetPatchOccupied %d %d: %d\n", x, z, (int)loaded);
-//     patch_lod->m_PatchesOccupied[(z+1)*3 + (x+1)] = loaded;
-// }
+static dmGameObject::HInstance SpawnPatch(HTerrain terrain, dmhash_t id)
+{
+    dmVMath::Point3 position(0, 0, 0);
+    dmVMath::Quat rotation(0, 0, 0, 1);
+    dmVMath::Vector3 scale(1, 1, 1);
+
+    dmGameObject::HPropertyContainer properties = 0;
+
+    dmGameObject::HInstance instance = 0;
+    dmGameObject::Result result = dmGameSystem::CompFactorySpawn(terrain->m_PatchFactoryWorld, terrain->m_PatchFactory, terrain->m_Collection,
+                                                                    id, position, rotation, scale, properties, &instance);
+
+    if (result != dmGameObject::RESULT_OK)
+    {
+        dmLogError("Failed to instantiate patch game object!");
+        return 0;
+    }
+
+    return instance;
+}
 
 HTerrain Create(const InitParams& params)
 {
@@ -500,16 +548,67 @@ HTerrain Create(const InitParams& params)
     HTerrain terrain = new TerrainWorld;
 
     terrain->m_Callback = params.m_Callback;
-    terrain->m_View = params.m_View;
-    terrain->m_Proj = params.m_Proj;
+    terrain->m_View     = params.m_View;
+    terrain->m_Proj     = params.m_Proj;
+    terrain->m_Factory  = params.m_Factory;
 
-    uint32_t terrain_seed = 1234567;
+    uint32_t terrain_seed = 1234567; // TODO: Make configurable
     dmRng::Init(&terrain->m_Rng, terrain_seed);
 
     Vector3 camera_pos = (terrain->m_View.getCol(3) * -1).getXYZ();
 
+    // Create the gameobject prototype
+
+    uint32_t mesh_type_index = 0xFFFFFFFF;
+    {
+        terrain->m_Collection = params.m_Collection;
+
+        dmhash_t factory_go_id = dmMessage::GetPath(&params.m_PatchFactoryUrl);
+        terrain->m_FactoryInstance = dmGameObject::GetInstanceFromIdentifier(terrain->m_Collection, factory_go_id);
+        if (!terrain->m_FactoryInstance)
+        {
+            dmLogError("Failed to get instance '%s' from collection", dmHashReverseSafe64(factory_go_id));
+            delete terrain;
+            return 0;
+        }
+
+        dmhash_t factory_id = dmMessage::GetFragment(&params.m_PatchFactoryUrl);
+        uint32_t component_type_index;
+        dmGameObject::Result r = dmGameObject::GetComponent(terrain->m_FactoryInstance, factory_id, &component_type_index,
+                                                            (dmGameObject::HComponent*)&terrain->m_PatchFactory,
+                                                            (dmGameObject::HComponentWorld*)&terrain->m_PatchFactoryWorld);
+        if (r != dmGameObject::RESULT_OK)
+        {
+            dmLogError("Failed to get component '%s' from collection", dmHashReverseSafe64(factory_id));
+            delete terrain;
+            return 0;
+        }
+
+        uint32_t factory_type_index = dmGameObject::GetComponentTypeIndex(terrain->m_Collection, dmHashString64("factoryc"));
+        if (factory_type_index != component_type_index)
+        {
+            dmLogError("Component '%s' is not a game object factory", dmHashReverseSafe64(factory_id));
+            delete terrain;
+            return 0;
+        }
+
+        mesh_type_index = dmGameObject::GetComponentTypeIndex(terrain->m_Collection, dmHashString64("meshc"));
+        if (0xFFFFFFFF == mesh_type_index)
+        {
+            dmLogError("Component type 'meshc' isn't registered in the engine!");
+            delete terrain;
+            return 0;
+        }
+    }
+
     // Number of steps to divide
     int num_divides = GetPatchSize(0);
+
+    dmBuffer::StreamDeclaration streams_decl[] = {
+        {VERTEX_STREAM_NAME_POSITION, dmBuffer::VALUE_TYPE_FLOAT32, 3},
+        {VERTEX_STREAM_NAME_NORMAL, dmBuffer::VALUE_TYPE_FLOAT32, 3},
+        {VERTEX_STREAM_NAME_COLOR, dmBuffer::VALUE_TYPE_UINT8, 3},
+    };
 
     // Initialize patches
     for (int lod = 0, id = 0; lod < NUM_LOD_LEVELS; ++lod)
@@ -518,21 +617,39 @@ HTerrain Create(const InitParams& params)
 
         WorldToPatchCoord(camera_pos, lod, patch_lod->m_CameraXZ);
 
+        uint32_t num_vertices = num_divides * num_divides * 2 * 3;
+
         for (int x = -1, i = 0; x <= 1; ++x)
         {
             for (int z = -1; z <= 1; ++z, ++i, ++id)
             {
-                //SetPatchOccupied(patch_lod, x, z, false);
-
                 TerrainPatch* patch = &patch_lod->m_Patches[i];
                 memset(patch, 0, sizeof(*patch));
 
-                patch->m_Id = id; // debug only
+                patch->m_Id = id; // to uniquely separate them from each other
                 patch->m_HeightSeed = terrain_seed; // duplicate, but makes it easier to access on threads
                 patch->m_Lod = lod;
                 patch->m_Generate = 1; // pass in option for this in the init function
 
-                CreateBuffer(&patch->m_Buffer, num_divides);
+                char path[512];
+                dmSnPrintf(path, sizeof(path), DM_RESOURCE_NAME_PREFIX "/patch_%d_%d.bufferc", lod, id);
+                CreateBufferResource(terrain->m_Factory, path, streams_decl, DM_ARRAY_SIZE(streams_decl), num_vertices, &patch->m_Resource);
+                patch->m_PathHash = dmHashString64(path);
+
+                dmSnPrintf(path, sizeof(path), "/terrain_patch_%d", id);
+                patch->m_InstanceId = dmHashString64(path);
+                patch->m_Instance = SpawnPatch(terrain, patch->m_InstanceId);
+
+                const dmhash_t mesh_name_hash = dmHashString64("mesh");
+                dmGameObject::Result r = dmGameObject::GetComponent(patch->m_Instance, mesh_name_hash, &mesh_type_index, &patch->m_MeshComponent, 0);
+                if (r != dmGameObject::RESULT_OK)
+                {
+                    dmLogError("Component '%s' wasn't found in game object!", dmHashReverseSafe64(mesh_name_hash));
+                    delete terrain;
+                }
+
+                // TODO: Add getters for res_buffer.h / BufferResource
+                patch->m_Buffer = patch->m_Resource->m_Buffer;
 
                 PatchSetState(patch, PS_UNLOADED);
 
@@ -576,7 +693,7 @@ void Destroy(HTerrain terrain)
         for (int i = 0; i < NUM_PATCHES; ++i)
         {
             TerrainPatch* patch = &terrain->m_Terrain[lod].m_Patches[i];
-            PatchDelete(patch);
+            PatchDelete(terrain, patch);
         }
     }
 
@@ -632,14 +749,30 @@ static void ToXZ(int idx, int *out_x, int *out_z)
     *out_z = iz - 1;    // 0..2 -> -1..1
 }
 
-static int FindUnoccupied(const bool* occupied, int* out_x, int* out_z)
+static int FindUnoccupied(int octant, const bool* occupied, int* out_x, int* out_z)
 {
+    // Since we want to prioritize the loading of the patch immediately in front of the camera
+    // we want to sort the patches.
+    // This index table allows us to iterate in a different order
+    const int all_indices[8*NUM_PATCHES] = {
+        4, 5, 2, 8, 1, 7, 0, 3, 6,  // dir:  1, 0, 0  East
+        4, 2, 1, 5, 0, 8, 3, 7, 6,  // dir:  1, 0,-1  NorthEast
+        4, 1, 0, 2, 3, 5, 6, 7, 8,  // dir: 0, 0, -1  North
+        4, 0, 1, 3, 6, 2, 7, 5, 8,  // dir: -1, 0,-1  NorthWest
+        4, 3, 6, 0, 7, 1, 8, 5, 2,  // dir: -1, 0, 0  West
+        4, 6, 3, 7, 0, 8, 1, 5, 2,  // dir: -1, 0, 1  SouthWest
+        4, 7, 6, 8, 3, 5, 0, 1, 2,  // dir: 0, 0,  1  South
+        4, 8, 7, 5, 6, 2, 3, 1, 0,  // dir:  1, 0, 1  SouthEast
+    };
+
+    const int* indices = &all_indices[octant * NUM_PATCHES];
     for (int i = 0; i < NUM_PATCHES; ++i)
     {
-        if (!occupied[i])
+        int index = indices[i];
+        if (!occupied[index])
         {
-            ToXZ(i, out_x, out_z);
-            return i;
+            ToXZ(index, out_x, out_z);
+            return index;
         }
     }
     return -1;
@@ -651,6 +784,12 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
 {
     // static int frame = 0;
     // frame++;
+
+    // figure out the quadrant that the camera direction is pointing at
+    float camdirx = terrain->m_CameraDir.getX();
+    float camdirz = -terrain->m_CameraDir.getZ(); // we want negative Z to be "north"
+    float a = atan2f(camdirz, camdirx);
+    int octant = int( 8 * a / (2*M_PI) + 8.5f ) % 8;
 
     for (int lod = 0; lod < NUM_LOD_LEVELS; ++lod)
     {
@@ -727,7 +866,7 @@ static void UpdatePatches(HTerrain terrain, Vector3 camera_pos)
                     // Find an unoccupied slot next to the camera
                     // TODO: Find an unoccupied slot in front of the camera first, as we want to load them first
                     int x, z;
-                    int idx = FindUnoccupied(occupied, &x, &z);
+                    int idx = FindUnoccupied(octant, occupied, &x, &z);
                     if (idx >= 0)
                     {
                         occupied[idx] = true;
@@ -861,10 +1000,10 @@ static bool UpdateCameraPos(HTerrain terrain, dmVMath::Vector3& camera_pos)
         //         camera_diffx, camera_diffz, Sign(camera_diffx), Sign(camera_diffz),
         //         camera_pos.getX(), camera_pos.getY(), camera_pos.getZ());
         // }
-        if (camera_moved)
-        {
-            printf("Camera update: %d, %d\n", patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
-        }
+        // if (camera_moved)
+        // {
+        //     printf("Camera update: %d, %d\n", patch_lod->m_CameraXZ[0], patch_lod->m_CameraXZ[1]);
+        // }
 
         {
             DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
@@ -874,6 +1013,24 @@ static bool UpdateCameraPos(HTerrain terrain, dmVMath::Vector3& camera_pos)
     }
     return lods_need_update;
 }
+
+static void UpdatePatchGameObject(HTerrain terrain, FlushCommand* cmd)
+{
+    const dmhash_t name_hash_mesh = dmHashString64("mesh");
+    const dmhash_t name_hash_vertices = dmHashString64("vertices");
+
+    dmGameObject::PropertyVar value(cmd->m_BufferPathHash);
+    dmGameObject::PropertyResult pr = dmGameObject::SetProperty(cmd->m_Instance, name_hash_mesh, name_hash_vertices, &value);
+    if (pr != dmGameObject::PROPERTY_RESULT_OK)
+    {
+        dmLogError("Failed to set property '%s' to game object!", dmHashReverseSafe64(name_hash_vertices));
+    }
+
+    dmGameObject::SetPosition(cmd->m_Instance, cmd->m_Position);
+
+    dmAtomicIncrement32(cmd->m_DataState);
+}
+
 
 void Update(HTerrain terrain, const UpdateParams& params)
 {
@@ -899,6 +1056,18 @@ void Update(HTerrain terrain, const UpdateParams& params)
     if (!terrain->m_Thread)
     {
         UpdatePatches(terrain, terrain->m_CameraPos);
+    }
+
+    dmArray<FlushCommand> work;
+    {
+        DM_MUTEX_SCOPED_LOCK(terrain->m_ThreadMutex);
+        work.Swap(terrain->m_FlushCommands);
+    }
+
+    // We need to do this on the main thread currently, as the game object api isn't yet thread safe
+    for (uint32_t i = 0; i < work.Size(); ++i)
+    {
+        UpdatePatchGameObject(terrain, &work[i]);
     }
 }
 

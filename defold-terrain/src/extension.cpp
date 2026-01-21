@@ -6,9 +6,9 @@
 #define MODULE_NAME "terrain"
 
 #if defined(TERRAIN_DEBUG)
-    #define TRACE printf
+    #define LOG printf
 #else
-    #define TRACE (void)
+    #define LOG (void)
 #endif
 
 
@@ -23,10 +23,12 @@ struct TerrainCommand
 
 struct ExtensionContext
 {
-    dmScript::LuaCallbackInfo* m_Callback;
-    HTerrain m_Terrain;
-    dmArray<TerrainCommand> m_Commands;
-    dmMutex::HMutex m_CommandsMutex;
+    dmScript::LuaCallbackInfo*  m_Callback;
+    HTerrain                    m_Terrain;
+    dmArray<TerrainCommand>     m_Commands;
+    dmMutex::HMutex             m_CommandsMutex;
+
+    HResourceFactory            m_Factory;
 };
 ExtensionContext* g_TerrainWorld = 0;
 
@@ -54,10 +56,10 @@ static void Terrain_PatchCallback(TerrainEvents event, TerrainPatch* patch)
     lua_newtable(L);
 
     lua_pushinteger(L, patch->m_Id);
-    lua_setfield(L, -2, "id");
+    lua_setfield(L, -2, "unique_id");
 
-    // lua_pushlightuserdata(L, (void*)patch);
-    // lua_setfield(L, -2, "ptr");
+    dmScript::PushHash(L, patch->m_InstanceId);
+    lua_setfield(L, -2, "id");
 
     lua_pushinteger(L, patch->m_XZ[0]);
     lua_setfield(L, -2, "x");
@@ -69,9 +71,11 @@ static void Terrain_PatchCallback(TerrainEvents event, TerrainPatch* patch)
     dmScript::PushVector3(L, patch->m_Position);
     lua_setfield(L, -2, "position");
     
-    dmScript::LuaHBuffer luabuf(patch->m_Buffer, dmScript::OWNER_C);
-    dmScript::PushBuffer(L, luabuf);
-    lua_setfield(L, -2, "buffer");
+    if (event == TERRAIN_PATCH_INIT || event == TERRAIN_PATCH_SHOW)
+    {
+        dmScript::PushHash(L, patch->m_PathHash);
+        lua_setfield(L, -2, "resource");
+    }
 
     dmScript::PCall(L, 3, 0); // self + # user arguments
 
@@ -116,16 +120,28 @@ static int Terrain_Init(lua_State* L)
     DM_LUA_STACK_CHECK(L, 0);
 
     ExtensionContext* world = g_TerrainWorld;
-
-    world->m_Callback = dmScript::CreateCallback(L, 1);
+    world->m_Terrain = 0;
+    world->m_Callback = 0;
 
     dmTerrain::InitParams init_params;
     init_params.m_Callback = Terrain_Callback;
-    init_params.m_BasePatchSize = 512;
+    init_params.m_BasePatchSize = 512;          // TODO: Make configurable
+    init_params.m_Factory = world->m_Factory;
+    init_params.m_Collection = dmScript::CheckCollection(L);
 
     if (lua_istable(L, 2))
     {
         lua_pushvalue(L, 2);
+
+        lua_getfield(L, -1, "factory");
+        dmMessage::URL* url = dmScript::ToURL(L, -1);
+        if (!url)
+        {
+            lua_pop(L, 2);
+            return DM_LUA_ERROR("Expected 'factory' to be of type msg.url(). Got '%s'", lua_tostring(L, -1));
+        }
+        init_params.m_PatchFactoryUrl = *url;
+        lua_pop(L, 1);
 
         lua_getfield(L, -1, "view");
         Matrix4* view = dmScript::ToMatrix4(L, -1);
@@ -144,8 +160,9 @@ static int Terrain_Init(lua_State* L)
     }
 
     world->m_Terrain = dmTerrain::Create(init_params);
+    world->m_Callback = dmScript::CreateCallback(L, 1);
 
-    printf("terrain.init()\n");
+    LOG("terrain.init()\n");
 
     return 0;
 }
@@ -155,9 +172,12 @@ static int Terrain_Exit(lua_State* L)
     DM_LUA_STACK_CHECK(L, 0);
     ExtensionContext* world = g_TerrainWorld;
 
-    dmTerrain::Destroy(world->m_Terrain);
+    if (world->m_Terrain)
+        dmTerrain::Destroy(world->m_Terrain);
+    world->m_Terrain = 0;
 
-    dmScript::DestroyCallback(world->m_Callback);
+    if (world->m_Callback)
+        dmScript::DestroyCallback(world->m_Callback);
     world->m_Callback = 0;
 
     return 0;
@@ -167,6 +187,8 @@ static int Terrain_Update(lua_State* L)
 {
     DM_LUA_STACK_CHECK(L, 0);
     ExtensionContext* world = g_TerrainWorld;
+    if (!world->m_Terrain)
+        return 0;
 
     dmTerrain::UpdateParams update_params;
     update_params.m_Dt = (float)luaL_checknumber(L, 1); // not sure if needed. perhaps use for time slicing?
@@ -244,6 +266,7 @@ static void LuaInit(lua_State* L)
         lua_pushnumber(L, (lua_Number) name); \
         lua_setfield(L, -2, #name);\
 
+     SETCONSTANT(TERRAIN_PATCH_INIT); // a patch has been initialized
      SETCONSTANT(TERRAIN_PATCH_HIDE); // a patch is about to be moved
      SETCONSTANT(TERRAIN_PATCH_SHOW); // a patch is about to be shown
 
@@ -259,12 +282,34 @@ static dmExtension::Result AppInitialize(dmExtension::AppParams* params)
     return dmExtension::RESULT_OK;
 }
 
+static void DestroyContext(ExtensionContext* ctx)
+{
+    if (ctx->m_CommandsMutex)
+        dmMutex::Delete(ctx->m_CommandsMutex);
+    delete ctx;
+}
+
 static dmExtension::Result Initialize(dmExtension::Params* params)
 {
-    g_TerrainWorld = new ExtensionContext;
-    g_TerrainWorld->m_CommandsMutex = dmMutex::New();
+    assert(g_TerrainWorld == 0);
+
+    ExtensionContext* ctx = new ExtensionContext;
+    ctx->m_CommandsMutex = dmMutex::New();
+    ctx->m_Factory = (HResourceFactory)ExtensionParamsGetContextByName(params, "factory");
+    if (!ctx->m_Factory)
+    {
+        dmLogError("Failed to get 'factory' context");
+        goto init_cleanup;
+    }
+
     LuaInit(params->m_L);
-    printf("Registered %s Extension\n", MODULE_NAME);
+    dmLogInfo("Registered %s Extension\n", MODULE_NAME);
+    g_TerrainWorld = ctx;
+    return dmExtension::RESULT_OK;
+
+init_cleanup:
+    DestroyContext(ctx);
+    g_TerrainWorld = 0;
     return dmExtension::RESULT_OK;
 }
 
@@ -275,8 +320,7 @@ static dmExtension::Result AppFinalize(dmExtension::AppParams* params)
 
 static dmExtension::Result Finalize(dmExtension::Params* params)
 {
-    dmMutex::Delete(g_TerrainWorld->m_CommandsMutex);
-    delete g_TerrainWorld;
+    DestroyContext(g_TerrainWorld);
     g_TerrainWorld = 0;
     return dmExtension::RESULT_OK;
 }
