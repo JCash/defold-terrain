@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <dmsdk/dlib/math.h>
 #include <dmsdk/dlib/time.h>
-#include <dmsdk/gameobject/gameobject_props.h>
+#include <dmsdk/gameobject/gameobject.h>
 
 #include "buffer.h"
 #include "loader_file.h"
@@ -1020,7 +1020,7 @@ static void UpdatePatchGameObject(HTerrain terrain, FlushCommand* cmd)
     const dmhash_t name_hash_vertices = dmHashString64("vertices");
 
     dmGameObject::PropertyVar value(cmd->m_BufferPathHash);
-    dmGameObject::PropertyResult pr = dmGameObject::SetProperty(cmd->m_Instance, name_hash_mesh, name_hash_vertices, &value);
+    dmGameObject::PropertyResult pr = dmGameObject::SetPropertyFromHash(cmd->m_Instance, name_hash_mesh, name_hash_vertices, cmd->m_BufferPathHash);
     if (pr != dmGameObject::PROPERTY_RESULT_OK)
     {
         dmLogError("Failed to set property '%s' to game object!", dmHashReverseSafe64(name_hash_vertices));
