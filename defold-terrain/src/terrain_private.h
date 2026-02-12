@@ -1,9 +1,15 @@
 #pragma once
 #include <dmsdk/sdk.h>
 #include <dmsdk/dlib/align.h>
+#include <dmsdk/dlib/array.h>
 #include <dmsdk/dlib/atomic.h>
+#include <dmsdk/dlib/message.h>
 #include <dmsdk/dlib/thread.h>
 #include <dmsdk/dlib/condition_variable.h>
+
+#include <dmsdk/gamesys/components/comp_collection_proxy.h>
+#include <dmsdk/gamesys/components/comp_factory.h>
+
 #include "terrain.h"
 #include "rng.h"
 
@@ -17,6 +23,14 @@ namespace dmTerrain {
     {
         TerrainPatch    m_Patches[NUM_PATCHES];
         int             m_CameraXZ[2]; // The camera pos in patch space
+    };
+
+    struct FlushCommand
+    {
+        dmGameObject::HInstance m_Instance;
+        dmVMath::Point3         m_Position;
+        dmhash_t                m_BufferPathHash;
+        int32_atomic_t*         m_DataState;
     };
 
     struct DM_ALIGNED(16) TerrainWorld
@@ -34,6 +48,18 @@ namespace dmTerrain {
         dmThread::Thread    m_Thread;
         dmMutex::HMutex     m_ThreadMutex;
         dmConditionVariable::HConditionVariable m_ThreadCondition;
+
+        // Game object
+        HResourceFactory                m_Factory;
+
+        dmGameObject::HCollection       m_Collection;
+        dmGameObject::HInstance         m_FactoryInstance;
+
+        dmGameSystem::HFactoryWorld     m_PatchFactoryWorld;
+        dmGameSystem::HFactoryComponent m_PatchFactory;
+
+        // Main thread synchronization
+        dmArray<FlushCommand>           m_FlushCommands;
 
         void* m_LoaderContext;
 

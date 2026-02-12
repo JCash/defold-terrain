@@ -105,10 +105,10 @@ namespace dmNoise
         int yi = floorf(y);
         float fracx = x - xi;
         float fracy = y - yi;
-        float h0 = (Noise2D(xi+0, yi+0, seed) / (float)UINT_MAX);// * 2.0f - 1.0f;
-        float h1 = (Noise2D(xi+1, yi+0, seed) / (float)UINT_MAX);// * 2.0f - 1.0f;
-        float h2 = (Noise2D(xi+0, yi+1, seed) / (float)UINT_MAX);// * 2.0f - 1.0f;
-        float h3 = (Noise2D(xi+1, yi+1, seed) / (float)UINT_MAX);// * 2.0f - 1.0f;
+        float h0 = (Noise2D(xi+0, yi+0, seed) / (float)UINT_MAX);
+        float h1 = (Noise2D(xi+1, yi+0, seed) / (float)UINT_MAX);
+        float h2 = (Noise2D(xi+0, yi+1, seed) / (float)UINT_MAX);
+        float h3 = (Noise2D(xi+1, yi+1, seed) / (float)UINT_MAX);
 
         float tx = fracx * fracx * (3.0f - 2.0f * fracx);
         float ty = fracy * fracy * (3.0f - 2.0f * fracy);
