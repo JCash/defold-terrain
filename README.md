@@ -10,7 +10,11 @@ Just Cause 2:
 
 Horizon - Zero Dawn:
 * GPU-Based Procedural Placement in Horizon Zero Dawn
-  * https://www.guerrilla-games.com/read/gpu-based-procedural-placement-in-horizon-zero-dawn
+  * PDF: https://www.guerrilla-games.com/read/gpu-based-procedural-placement-in-horizon-zero-dawn
+  * Video: https://www.youtube.com/watch?v=ToCozpl1sYY
 
 * Between Tech and Art: The Vegetation of Horizon Zero Dawn
   * https://www.youtube.com/watch?v=wavnKZNSYqU 
+
+* Creating a Tools Pipeline for Horizon: Zero Dawn
+  * https://www.youtube.com/watch?v=KRJkBxKv1VM
