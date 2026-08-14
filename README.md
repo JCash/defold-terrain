@@ -11,3 +11,6 @@ Just Cause 2:
 Horizon - Zero Dawn:
 * GPU-Based Procedural Placement in Horizon Zero Dawn
   * https://www.guerrilla-games.com/read/gpu-based-procedural-placement-in-horizon-zero-dawn
+
+* Between Tech and Art: The Vegetation of Horizon Zero Dawn
+  * https://www.youtube.com/watch?v=wavnKZNSYqU 
