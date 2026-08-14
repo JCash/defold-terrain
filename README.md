@@ -18,3 +18,8 @@ Horizon - Zero Dawn:
 
 * Creating a Tools Pipeline for Horizon: Zero Dawn
   * https://www.youtube.com/watch?v=KRJkBxKv1VM
+
+Tom Clancy's Ghost Recon Wildlands:
+
+* Terrain
+  * https://www.gdcvault.com/play/1024029/-Ghost-Recon-Wildlands-Terrain
