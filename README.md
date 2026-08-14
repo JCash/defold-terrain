@@ -23,3 +23,8 @@ Tom Clancy's Ghost Recon Wildlands:
 
 * Terrain
   * https://www.gdcvault.com/play/1024029/-Ghost-Recon-Wildlands-Terrain
+ 
+Far Cry 5
+
+* Terrain Rendering in 'Far Cry 5'
+  * http://www.gdcvault.com/play/1025261/Terrain-Rendering-in-Far-Cry
